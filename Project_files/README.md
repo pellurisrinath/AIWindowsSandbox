@@ -237,6 +237,14 @@ windows-ai-sandbox/
 
 ---
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=pellurisrinath/AIWindowsSandbox&type=Date)](https://star-history.com/#pellurisrinath/AIWindowsSandbox)
+
+If this project helped you, please consider giving it a ⭐ on GitHub — it helps others discover the project and motivates continued development.
+
+---
+
 ## Quick Start
 
 ### 1. Clone the repository
