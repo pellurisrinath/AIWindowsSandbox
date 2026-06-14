@@ -351,13 +351,16 @@ try {
         if (-not $pythonCmd) {
             $pythonInstaller = "C:\SharedTools\Installers\$($tools.python.fileName)"
             if (Test-Path $pythonInstaller) {
-                Write-Log "Installing Python via MSI silently with verbose logging..." "INFO"
+                Write-Log "Installing Python silently with verbose logging..." "INFO"
                 # Initialize COM for sandbox compatibility
                 try { [System.Runtime.InteropServices.Marshal]::InitializeCom() } catch {}
                 try {
+                    # Python 3.12+ ships .exe installers (not .msi). The .exe accepts
+                    # the same /quiet MSI-style arguments. The /log flag writes verbose
+                    # output to the specified file.
                     $pythonLog = Join-Path $logsDir "python-install.log"
-                    $msiArgs = "/i `"$pythonInstaller`" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 /L*v `"$pythonLog`""
-                    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                    $pyArgs = "$($tools.python.silentArgs) /log `"$pythonLog`""
+                    $proc = Start-Process -FilePath $pythonInstaller -ArgumentList $pyArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "[OK] Python installed successfully." "INFO"
                         $results["python"] = "OK"

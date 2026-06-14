@@ -1,5 +1,30 @@
 # Changelog
 
+## [2026.06.14.23.39] — 2026-06-14
+
+### Fixed
+- **Python installer URL**: Switched from `.msi` to `.exe` (Python.org no longer ships .msi for 3.12+). URL updated to v3.12.10; fallback to v3.11.10
+- **Beyond Compare 4 URL**: Replaced broken `bcompare-4-stable` with working `download/v4` page. Fallback build number fixed (28327 → 28397)
+- **LM Studio URL**: Replaced 404 `install/windows/latest/x64` with working `download/latest/win32/x64`
+- **Python install in bootstrap**: Switched from `msiexec /i` to direct `.exe` execution with `/quiet` args and `/log` flag for verbose logging
+
+### Updated
+- **Notepad++ fallback URL**: Refreshed from v8.6.8 to v8.9.6.4 (current latest)
+- **PowerToys fallback URL**: Refreshed from v0.81.1 to v0.100.0 (current latest)
+- **Antigravity CLI**: Marked as `_status: "unavailable"` in `config/tools.json` — GitHub repo does not exist; bootstrap already gracefully skips
+
+### Added
+- `Project_files/CompatibilityReport_14June2026_2339_CET.md` — per-tool Windows 11 24H2/25H2 compatibility report
+- `Project_files/ImplementationPlan_14June2026_2339_CET.md` — implementation plan for this round
+- `_note` field in `python` tool entry explaining why `.exe` is used instead of `.msi`
+
+### Compatibility Verified
+- All 22 tools work on Windows 11 24H2/25H2 x64
+- 16 working URLs, 2 refreshed stale URLs, 4 broken URLs fixed, 1 tool marked unavailable
+- 0 tools incompatible with target OS
+
+---
+
 ## [2026.06.14.23.09] — 2026-06-14
 
 ### Changed

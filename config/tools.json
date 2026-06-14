@@ -11,13 +11,14 @@
       "name": "Python",
       "enabled": true,
       "downloadType": "direct",
-      "url": "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.msi",
-      "fallbackUrl": "https://www.python.org/ftp/python/3.11.10/python-3.11.10-amd64.msi",
-      "fileName": "python-amd64.msi",
-      "silentArgs": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+      "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe",
+      "fallbackUrl": "https://www.python.org/ftp/python/3.11.10/python-3.11.10-amd64.exe",
+      "fileName": "python-amd64.exe",
+      "silentArgs": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_doc=0 Include_launcher=0",
       "logFile": "C:\\ProgramData\\WindowsAISandboxApps\\Logs\\python-install.log",
       "skipFlag": "SkipPython",
-      "order": 0
+      "order": 0,
+      "_note": "Python 3.12+ ships .exe installers only (not .msi). The .exe accepts /quiet MSI-style arguments."
     },
     "nodejs": {
       "name": "Node.js + npm",
@@ -64,7 +65,7 @@
       "enabled": true,
       "downloadType": "github",
       "url": "https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest",
-      "fallbackUrl": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.8/npp.8.6.8.Installer.x64.exe",
+      "fallbackUrl": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.6.4/npp.8.9.6.4.Installer.x64.exe",
       "assetRegex": "npp\\..*\\.Installer\\.x64\\.exe",
       "fileName": "npp-installer.exe",
       "silentArgs": "/S",
@@ -74,9 +75,9 @@
     "beyondcompare": {
       "name": "Beyond Compare 4",
       "enabled": true,
-      "downloadType": "direct",
-      "url": "https://www.scootersoftware.com/download/bcompare-4-stable",
-      "fallbackUrl": "https://www.scootersoftware.com/files/BCompare-4.4.7.28327.exe",
+      "downloadType": "scootersoftware",
+      "url": "https://www.scootersoftware.com/download/v4",
+      "fallbackUrl": "https://www.scootersoftware.com/files/BCompare-4.4.7.28397.exe",
       "fileName": "BCompare-installer.exe",
       "silentArgs": "/silent",
       "skipFlag": "SkipBeyondCompare",
@@ -96,7 +97,7 @@
       "name": "LM Studio",
       "enabled": true,
       "downloadType": "direct",
-      "url": "https://lmstudio.ai/install/windows/latest/x64",
+      "url": "https://lmstudio.ai/download/latest/win32/x64",
       "fallbackUrl": "https://lmstudio.ai/LM-Studio-Setup.exe",
       "fileName": "LM-Studio-Setup.exe",
       "silentArgs": "/S",
@@ -192,7 +193,7 @@
       "enabled": true,
       "downloadType": "github",
       "url": "https://api.github.com/repos/microsoft/PowerToys/releases/latest",
-      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.81.1/PowerToysSetup-0.81.1-x64.exe",
+      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.100.0/PowerToysSetup-0.100.0-x64.exe",
       "assetRegex": "PowerToysSetup.*x64\\.exe",
       "fileName": "PowerToysSetup.exe",
       "silentArgs": "/silent /norestart",
@@ -239,7 +240,9 @@
       "fileName": "antigravity-cli.exe",
       "silentArgs": "/S",
       "skipFlag": "SkipAntigravity",
-      "order": 21
+      "order": 21,
+      "_status": "unavailable",
+      "_note": "Antigravity CLI does not have a public GitHub release. github.com/google-deepmind/antigravity-cli returns 404. The bootstrap gracefully skips this tool."
     }
   }
 }
