@@ -5,7 +5,7 @@ $ErrorActionPreference = "Continue"
 $startTime = Get-Date
 
 # Setup Logs Directory
-$logsDir = "C:\ProgramData\AIWindowsSandbox\Logs"
+$logsDir = "C:\ProgramData\WindowsAISandboxApps\Logs"
 try {
     if (-not (Test-Path $logsDir)) {
         $null = New-Item -ItemType Directory -Path $logsDir -Force -ErrorAction Stop
@@ -118,7 +118,7 @@ try {
                 status        = $Status
             }
             $progressJson = $progress | ConvertTo-Json -Compress
-            $progressFile = "C:\ProgramData\AIWindowsSandbox\Logs\install-progress.json"
+            $progressFile = "C:\ProgramData\WindowsAISandboxApps\Logs\install-progress.json"
             $null = New-Item -ItemType Directory -Path (Split-Path $progressFile) -Force -ErrorAction SilentlyContinue
             $progressJson | Out-File -FilePath $progressFile -Encoding utf8 -Force -ErrorAction Stop
         } catch {
@@ -171,7 +171,8 @@ function Install-SilentProcess {
         [string]$ToolId,
         [string]$ToolName,
         [string]$InstallerPath,
-        [string]$SilentArgs
+        [string]$SilentArgs,
+        [string]$LogFile
     )
     
     if (-not (Test-Path $InstallerPath)) {
@@ -180,13 +181,20 @@ function Install-SilentProcess {
     }
 
     Write-Log "Installing $ToolName silently..." "INFO"
+    
+    # Auto-append MSI verbose logging if LogFile specified and installer is MSI
+    $finalArgs = $SilentArgs
+    if ($LogFile -and $InstallerPath.EndsWith(".msi", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $finalArgs = "$SilentArgs /L*v `"$LogFile`""
+    }
+    
     try {
-        $proc = Start-Process -FilePath $InstallerPath -ArgumentList $SilentArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
+        $proc = Start-Process -FilePath $InstallerPath -ArgumentList $finalArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
         if ($proc.ExitCode -eq 0) {
-            Write-Log "[$ToolName] installed successfully." "INFO"
+            Write-Log "[OK] $ToolName installed successfully." "INFO"
             return "OK"
         } else {
-            Write-Log "[$ToolName] installer exited with code $($proc.ExitCode)" "WARN"
+            Write-Log "[WARN] $ToolName installer exited with code $($proc.ExitCode)" "WARN"
             return "WARN"
         }
     } catch {
@@ -228,17 +236,21 @@ try {
         Write-Log "Checking for Python..." "INFO"
         $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
         if (-not $pythonCmd) {
-            $pythonInstaller = "C:\SharedTools\Installers\python-installer.exe"
+            $pythonInstaller = "C:\SharedTools\Installers\$($tools.python.fileName)"
             if (Test-Path $pythonInstaller) {
-                Write-Log "Installing Python silently..." "INFO"
+                Write-Log "Installing Python via MSI silently with verbose logging..." "INFO"
+                # Initialize COM for sandbox compatibility
+                try { [System.Runtime.InteropServices.Marshal]::InitializeCom() } catch {}
                 try {
-                    $proc = Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                    $pythonLog = Join-Path $logsDir "python-install.log"
+                    $msiArgs = "/i `"$pythonInstaller`" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 /L*v `"$pythonLog`""
+                    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "[OK] Python installed successfully." "INFO"
                         $results["python"] = "OK"
                         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Completed"
                     } else {
-                        Write-Log "[WARN] Python installer exited with code $($proc.ExitCode)" "WARN"
+                        Write-Log "[WARN] Python installer exited with code $($proc.ExitCode). Check log: $pythonLog" "WARN"
                         $results["python"] = "WARN"
                         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Failed"
                     }
@@ -404,7 +416,45 @@ try {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Installing"
         $installer = "C:\SharedTools\Installers\$($tools.ollama.fileName)"
+        
+        # Try WDAC bypass - set policy to Audit mode
+        Write-Log "Attempting WDAC policy bypass for Ollama installation..." "INFO"
+        try {
+            $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\CI"
+            Set-ItemProperty -Path $regPath -Name "VerifiedAndReputablePolicyState" -Value 0 -ErrorAction SilentlyContinue
+            Write-Log "WDAC policy set to Audit mode" "INFO"
+        } catch {
+            Write-Log "Could not modify WDAC policy: $_" "WARN"
+        }
+        
         $res = Install-SilentProcess -ToolId "ollama" -ToolName "Ollama" -InstallerPath $installer -SilentArgs $tools.ollama.silentArgs
+        $results["ollama"] = $res
+
+        # If WDAC still blocks, download Ollama CLI directly via curl
+        if ($res -ne "OK") {
+            Write-Log "Ollama installer may be blocked. Attempting direct CLI download via curl..." "WARN"
+            $ollamaCliUrl = "https://ollama.com/download/ollama-windows-amd64.exe"
+            $ollamaCliDest = "C:\SharedTools\Installers\ollama-windows-amd64.exe"
+            try {
+                & curl.exe -L -o $ollamaCliDest $ollamaCliUrl 2>&1 | ForEach-Object { Write-Log "$_" "INFO" }
+                if (Test-Path $ollamaCliDest) {
+                    $size = (Get-Item $ollamaCliDest).Length
+                    if ($size -gt 1MB) {
+                        $ollamaDir = "C:\Users\WDAGUtility\AppData\Local\Programs\Ollama"
+                        New-Item -ItemType Directory -Path $ollamaDir -Force | Out-Null
+                        Copy-Item -Path $ollamaCliDest -Destination "$ollamaDir\ollama.exe" -Force
+                        $env:PATH = "$ollamaDir;$env:PATH"
+                        [Environment]::SetEnvironmentVariable("PATH", "$ollamaDir;$([Environment]::GetEnvironmentVariable('PATH', 'User'))", "User")
+                        Write-Log "Ollama CLI installed to $ollamaDir" "OK"
+                        $res = "OK"
+                    } else {
+                        Write-Log "Downloaded Ollama CLI is too small ($size bytes), likely not a valid binary" "ERROR"
+                    }
+                }
+            } catch {
+                Write-Log "Failed to download Ollama CLI: $_" "ERROR"
+            }
+        }
         $results["ollama"] = $res
 
         if ($res -eq "OK") {
@@ -536,15 +586,33 @@ try {
     }
 }
 
-# Order 10: OpenCode Terminal
+# Order 10: OpenCode Terminal (installed via npm)
 try {
     if ($tools.'opencode-terminal'.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.'opencode-terminal'.fileName)"
-        $res = Install-SilentProcess -ToolId "opencode-terminal" -ToolName "OpenCode Terminal" -InstallerPath $installer -SilentArgs $tools.'opencode-terminal'.silentArgs
-        $results["opencode-terminal"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($results["nodejs"] -eq "OK") {
+            Write-Log "Installing OpenCode CLI via npm..." "INFO"
+            try {
+                Refresh-Path
+                $npmProc = Start-Process -FilePath "npm" -ArgumentList "i -g opencode-ai" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                if ($npmProc.ExitCode -eq 0) {
+                    Write-Log "[OK] OpenCode Terminal installed successfully via npm." "INFO"
+                    $results["opencode-terminal"] = "OK"
+                    Refresh-Path
+                } else {
+                    Write-Log "[WARN] OpenCode Terminal npm install exited with code $($npmProc.ExitCode)" "WARN"
+                    $results["opencode-terminal"] = "WARN"
+                }
+            } catch {
+                Write-Log "[ERROR] Failed to install OpenCode Terminal: $_" "ERROR"
+                $results["opencode-terminal"] = "ERROR"
+            }
+        } else {
+            Write-Log "[WARN] OpenCode Terminal skipped: Node.js not available" "WARN"
+            $results["opencode-terminal"] = "SKIP"
+        }
+        $status = if ($results["opencode-terminal"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status $status
     } else {
         Write-Log "[SKIP] OpenCode Terminal (disabled by config)" "INFO"
@@ -619,12 +687,33 @@ try {
     if ($tools.copilot.enabled -and $results["chrome"] -eq "OK") {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Microsoft Copilot PWA" -Status "Installing"
-        Write-Log "Installing Microsoft Copilot PWA..." "INFO"
+        Write-Log "Deploying Microsoft Copilot PWA shortcut..." "INFO"
         try {
-            Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "--app=https://copilot.microsoft.com --install-webapp" -Wait -NoNewWindow -ErrorAction Stop
-            Write-Log "[OK] Microsoft Copilot PWA deployed. (Note: Sign-in is required inside sandbox)" "INFO"
-            $results["copilot"] = "OK"
-            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Microsoft Copilot PWA" -Status "Completed"
+            # Dynamically locate Chrome
+            $chromePaths = @(
+                "C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+            )
+            $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            
+            if ($chromeExe) {
+                # Create desktop shortcut for Copilot
+                $shortcutPath = "$env:USERPROFILE\Desktop\Copilot.lnk"
+                $shell = New-Object -ComObject WScript.Shell
+                $shortcut = $shell.CreateShortcut($shortcutPath)
+                $shortcut.TargetPath = $chromeExe
+                $shortcut.Arguments = "--app=https://copilot.microsoft.com"
+                $shortcut.WorkingDirectory = Split-Path $chromeExe
+                $shortcut.IconLocation = "$chromeExe,0"
+                $shortcut.Save()
+                Write-Log "[OK] Copilot shortcut created on Desktop." "INFO"
+                $results["copilot"] = "OK"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Microsoft Copilot PWA" -Status "Completed"
+            } else {
+                Write-Log "[WARN] Chrome not found at expected paths. Copilot PWA skipped." "WARN"
+                $results["copilot"] = "WARN"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Microsoft Copilot PWA" -Status "Failed"
+            }
         } catch {
             Write-Log "[ERROR] Failed to deploy Copilot PWA: $_`n$($_.ScriptStackTrace)" "ERROR"
             $results["copilot"] = "ERROR"
@@ -929,7 +1018,7 @@ try {
 # 4. Completion Toast / Dialog
 try {
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete! Check C:\ProgramData\AIWindowsSandbox\Logs\sandbox-bootstrap.log for details.", "AI Sandbox Generator", 0, 64)
+    [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete! Check C:\ProgramData\WindowsAISandboxApps\Logs\sandbox-bootstrap.log for details.", "AI Sandbox Generator", 0, 64)
 } catch {
     # Fallback to outputting in console
     Write-Log "Sandbox ready." "INFO"

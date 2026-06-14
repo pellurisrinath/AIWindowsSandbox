@@ -298,7 +298,7 @@ function Get-NodeLtsUrl {
     } catch {
         Write-Log "Failed to query Node.js downloads page: $_`n$($_.ScriptStackTrace)" "WARN"
     }
-    return "https://nodejs.org/dist/v20.12.2/node-v20.12.2-x64.msi" # fallback
+    return "https://nodejs.org/dist/v20.18.0/node-v20.18.0-x64.msi" # fallback
 }
 
 # Helper: Resolve Scooter Software Beyond Compare
@@ -384,11 +384,44 @@ function Verify-DownloadedBinaryContent {
             }
         }
         
+        if ($FilePath.EndsWith(".msi", [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($firstBytes.Length -ge 4 -and 
+                ($firstBytes[0] -ne 0xD0 -or $firstBytes[1] -ne 0xCF -or 
+                 $firstBytes[2] -ne 0x11 -or $firstBytes[3] -ne 0xE0)) {
+                Write-Log "Binary verification failed: MSI file does not start with OLE header (D0 CF 11 E0)." "ERROR"
+                return $false
+            }
+        }
+        
         return $true
     } catch {
         Write-Log "Error verifying downloaded binary content: $_" "ERROR"
         return $false
     }
+}
+
+# Helper: Test if installer is already cached and valid
+function Test-InstallerAlreadyCached {
+    param(
+        [string]$FilePath,
+        [string]$ExpectedHash
+    )
+    if (-not (Test-Path $FilePath)) { return $false }
+    $size = (Get-Item $FilePath).Length
+    if ($size -lt 100KB) { return $false }
+    if (-not (Verify-DownloadedBinaryContent -FilePath $FilePath)) { return $false }
+    if ($ExpectedHash) {
+        if (-not (Verify-FileHash -FilePath $FilePath -ExpectedHash $ExpectedHash)) { return $false }
+    }
+    return $true
+}
+
+# Helper: Verify Windows Sandbox is not already running
+function Test-SandboxNotRunning {
+    $sandbox = Get-Process -Name "WindowsSandbox" -ErrorAction SilentlyContinue
+    $client = Get-Process -Name "WindowsSandboxClient" -ErrorAction SilentlyContinue
+    if ($sandbox -or $client) { return $false }
+    return $true
 }
 
 # Helper: Invoke Windows Defender Threat Scanning
@@ -519,13 +552,22 @@ function Invoke-SandboxLaunch {
             
             $destFile = $null
             $stagingFile = $null
-            if ($tool.fileName -and $tool.downloadType -ne "git" -and $tool.downloadType -ne "pip" -and $tool.downloadType -ne "pwa") {
+            if ($tool.fileName -and $tool.downloadType -ne "git" -and $tool.downloadType -ne "pip" -and $tool.downloadType -ne "pwa" -and $tool.downloadType -ne "npm") {
                 $destFile = Join-Path $installerPath $tool.fileName
                 $stagingFile = Join-Path $stagingPath $tool.fileName
             }
 
+            if ($tool.downloadType -eq "npm") {
+                Write-Log "Tool $($tool.name) will be installed via npm inside the sandbox." "INFO"
+                continue
+            }
+
             if ($tool.downloadType -eq "direct") {
-                if (-not (Test-Path $stagingFile)) {
+                if (-not (Test-InstallerAlreadyCached -FilePath $stagingFile -ExpectedHash $tool.hash)) {
+                    if (Test-Path $stagingFile) {
+                        Write-Log "Cached file is invalid or corrupted. Re-downloading: $($tool.name)" "WARN"
+                        Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                    }
                     try {
                         Download-FileWithProgress -Uri $tool.url -OutFile $stagingFile
                         if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
@@ -760,7 +802,7 @@ function Invoke-SandboxLaunch {
     </MappedFolder>
     <MappedFolder>
       <HostFolder>$LogsDir</HostFolder>
-      <SandboxFolder>C:\ProgramData\AIWindowsSandbox\Logs</SandboxFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Logs</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
   </MappedFolders>
@@ -792,6 +834,11 @@ function Invoke-SandboxLaunch {
         $progressFile = Join-Path $LogsDir "install-progress.json"
         if (Test-Path $progressFile) {
             Remove-Item -Path $progressFile -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-SandboxNotRunning)) {
+            Write-Log "Windows Sandbox is already running. Please close it first." "ERROR"
+            Exit-Script 1
         }
 
         $process = Start-Process WindowsSandbox -ArgumentList $wsbPath -PassThru -ErrorAction Stop
@@ -1132,7 +1179,7 @@ if ($GUI) {
         if ($chkAntigravity) { [void]$enabledStepsList.Add("Antigravity CLI") }
 
         foreach ($stepName in $enabledStepsList) {
-            $checkedListBox.Items.Add($stepName, $false)
+            [void]$checkedListBox.Items.Add($stepName, $false)
         }
 
         try {

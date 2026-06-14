@@ -1,5 +1,28 @@
 # Changelog
 
+## [2026.06.14.18.09] — 2026-06-14
+
+### Fixed
+- **Python installer**: Switched from `.exe` bootstrapper to `.msi` with verbose logging (`/L*v`). The `.exe` failed with COM error 0x80080005 in sandbox; MSI works with `msiexec`.
+- **Ollama**: Added WDAC policy bypass attempt (sets `VerifiedAndReputablePolicyState=0`); added curl fallback to download `ollama-windows-amd64.exe` CLI directly if NSIS installer blocked.
+- **OpenCode Terminal**: Switched from broken direct download (URL was an HTML page) to `npm i -g opencode-ai` (installed inside sandbox after Node.js).
+- **OpenCode Desktop**: Fixed URL to actual NSIS installer (`https://opencode.ai/download/stable/windows-x64-nsis`), corrected filename to `opencode-desktop-win-x64.exe`, added GitHub fallback URL.
+- **Copilot PWA**: Replaced hardcoded Chrome path with dynamic lookup (checks both `Program Files` and `Program Files (x86)`), removed invalid `--install-webapp` flag, now creates a desktop shortcut instead.
+- **Node.js fallback URL**: Updated from v20.12.2 to v20.18.0 in `Get-NodeLtsUrl`.
+- **MSI binary verification**: Added OLE compound document header check (D0 CF 11 E0) to `Verify-DownloadedBinaryContent` to catch corrupted MSI downloads.
+- **Batch file kill logic**: Removed `if %errorlevel%` conditional so we always wait 5 seconds after killing sandbox processes.
+
+### Changed
+- **Log directory**: Changed from `C:\ProgramData\AIWindowsSandbox\Logs` to `C:\ProgramData\WindowsAISandboxApps\Logs` in both host and sandbox scripts. WSB mapped folder updated to match.
+- **`Install-SilentProcess`**: Added optional `LogFile` parameter; auto-appends `/L*v` for MSI installers.
+- **npm downloadType**: Added handling in `Launch-AISandbox.ps1` to skip host-side download for npm-based tools.
+
+### Added
+- `Test-SandboxNotRunning` function in `Launch-AISandbox.ps1`; called before `Start-Process WindowsSandbox` to prevent "already running" errors.
+- `Project_files/ImplementationPlan_14June2026_1809_CET.md` — implementation plan document.
+
+---
+
 ## [2026.06.14.16.40] — 2026-06-14
 
 ### Fixed
