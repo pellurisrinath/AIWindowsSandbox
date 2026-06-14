@@ -1,0 +1,128 @@
+{
+  "tools": {
+    "python": {
+      "name": "Python",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://www.python.org/ftp/python/3.12.3/python-3.12.3-amd64.exe",
+      "fileName": "python-installer.exe",
+      "silentArgs": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+      "skipFlag": "SkipPython",
+      "order": 0,
+      "hash": "6b360b0e515d9a930777e5621404c000cfcf55259cf408801d9f8266cb669b38"
+    },
+    "nodejs": {
+      "name": "Node.js + npm",
+      "enabled": true,
+      "downloadType": "nodejs",
+      "url": "https://nodejs.org/dist/latest-v20.x/",
+      "fileName": "node-v20-x64.msi",
+      "silentArgs": "/qn /norestart",
+      "skipFlag": "SkipNpm",
+      "order": 1
+    },
+    "chrome": {
+      "name": "Google Chrome",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://dl.google.com/chrome/install/ChromeStandaloneSetup64.exe",
+      "fileName": "ChromeStandaloneSetup64.exe",
+      "silentArgs": "/silent /install",
+      "skipFlag": "SkipChrome",
+      "order": 2
+    },
+    "pageassist": {
+      "name": "Page Assist Chrome Extension",
+      "enabled": true,
+      "downloadType": "git",
+      "url": "https://github.com/n4ze3m/page-assist",
+      "fileName": "page-assist",
+      "silentArgs": "",
+      "skipFlag": "SkipPageAssist",
+      "order": 3
+    },
+    "brave": {
+      "name": "Brave Browser",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://laptop-updates.brave.com/latest/winx64",
+      "fileName": "BraveBrowserSetup.exe",
+      "silentArgs": "/silent /install",
+      "skipFlag": "SkipBrave",
+      "order": 4
+    },
+    "notepadpp": {
+      "name": "Notepad++",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest",
+      "fallbackUrl": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.8/npp.8.6.8.Installer.x64.exe",
+      "assetRegex": "npp\\..*\\.Installer\\.x64\\.exe",
+      "fileName": "npp-installer.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipNotepadPP",
+      "order": 5
+    },
+    "beyondcompare": {
+      "name": "Beyond Compare 4",
+      "enabled": true,
+      "downloadType": "scootersoftware",
+      "url": "https://www.scootersoftware.com/download",
+      "fileName": "BCompare-installer.exe",
+      "silentArgs": "/silent",
+      "skipFlag": "SkipBeyondCompare",
+      "order": 6
+    },
+    "ollama": {
+      "name": "Ollama",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://ollama.com/download/OllamaSetup.exe",
+      "fileName": "OllamaSetup.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipOllama",
+      "order": 7
+    },
+    "lmstudio": {
+      "name": "LM Studio",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://releases.lmstudio.ai/windows/latest",
+      "fileName": "LM-Studio-Setup.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipLMStudio",
+      "order": 8
+    },
+    "opencode": {
+      "name": "OpenCode",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://opencode.ai/download",
+      "fallbackUrl": "https://github.com/opencode-ai/opencode/releases/download/v0.0.1/OpenCodeSetup.exe",
+      "fileName": "OpenCodeSetup.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipOpenCode",
+      "order": 9
+    },
+    "crewai": {
+      "name": "Crew AI",
+      "enabled": true,
+      "downloadType": "pip",
+      "url": "crewai",
+      "fileName": "",
+      "silentArgs": "",
+      "skipFlag": "SkipCrewAI",
+      "order": 10
+    },
+    "copilot": {
+      "name": "Microsoft Copilot PWA",
+      "enabled": true,
+      "downloadType": "pwa",
+      "url": "https://copilot.microsoft.com",
+      "fileName": "",
+      "silentArgs": "",
+      "skipFlag": "SkipCopilot",
+      "order": 11
+    }
+  }
+}

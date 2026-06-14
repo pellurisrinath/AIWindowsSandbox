@@ -1,0 +1,19 @@
+# Runtime / generated
+sandbox-config.wsb
+install-config.json
+install-progress.json
+
+# Logs
+Logs/
+Logs-Test/
+
+# Agent artifacts
+.agents/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
