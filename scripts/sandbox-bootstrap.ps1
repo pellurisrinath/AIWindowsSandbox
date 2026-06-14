@@ -83,14 +83,23 @@ try {
     if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 4") }
     if ($tools.ollama.enabled) { 
         [void]$enabledSteps.Add("Ollama")
+        [void]$enabledSteps.Add("Gemma4 Model")
         [void]$enabledSteps.Add("nous-hermes2 Model")
     }
     if ($tools.lmstudio.enabled) { [void]$enabledSteps.Add("LM Studio") }
-    if ($tools.opencode.enabled) { [void]$enabledSteps.Add("OpenCode") }
+    if ($tools.'opencode-terminal'.enabled) { [void]$enabledSteps.Add("OpenCode Terminal") }
+    if ($tools.'opencode-desktop'.enabled) { [void]$enabledSteps.Add("OpenCode Desktop") }
     if ($tools.crewai.enabled) { [void]$enabledSteps.Add("Crew AI") }
     if ($tools.copilot.enabled -and $tools.chrome.enabled) { [void]$enabledSteps.Add("Microsoft Copilot PWA") }
-    [void]$enabledSteps.Add("Antigravity 2.0 Check")
-    [void]$enabledSteps.Add("Hermes Agent CLI Check")
+    if ($tools.vscode.enabled) { [void]$enabledSteps.Add("Visual Studio Code") }
+    if ($tools.vscommunity.enabled) { [void]$enabledSteps.Add("Visual Studio Community") }
+    if ($tools.'7zip'.enabled) { [void]$enabledSteps.Add("7-Zip") }
+    if ($tools.sysinternals.enabled) { [void]$enabledSteps.Add("Sysinternals Suite") }
+    if ($tools.powertoys.enabled) { [void]$enabledSteps.Add("Windows PowerToys") }
+    if ($tools.windowssdk.enabled) { [void]$enabledSteps.Add("Windows SDK") }
+    if ($tools.adk.enabled) { [void]$enabledSteps.Add("Windows ADK") }
+    if ($tools.adkwinpe.enabled) { [void]$enabledSteps.Add("Windows ADK WinPE Add-on") }
+    if ($tools.antigravity.enabled) { [void]$enabledSteps.Add("Antigravity CLI") }
 
     $global:totalSteps = $enabledSteps.Count
     $global:currentStep = 0
@@ -401,9 +410,7 @@ try {
         if ($res -eq "OK") {
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Completed"
             
-            # Substep: nous-hermes2 Model
-            $global:currentStep++
-            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Installing"
+            # Substep: Start Ollama and wait for API
             Write-Log "Starting Ollama application..." "INFO"
             $ollamaAppPath = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama app.exe"
             if (Test-Path $ollamaAppPath) {
@@ -421,8 +428,32 @@ try {
                         # Poll again
                     }
                 }
+                
                 if ($started) {
-                    # Pull nous-hermes2 model
+                    # Substep: Gemma4 Model (first priority)
+                    $global:currentStep++
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Installing"
+                    Write-Log "Pulling Gemma4 model..." "INFO"
+                    try {
+                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull gemma4" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        if ($proc.ExitCode -eq 0) {
+                            Write-Log "[OK] Gemma4 model pulled successfully." "INFO"
+                            $results["gemma4_model"] = "OK"
+                            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Completed"
+                        } else {
+                            Write-Log "[WARN] ollama pull gemma4 exited with code $($proc.ExitCode)" "WARN"
+                            $results["gemma4_model"] = "WARN"
+                            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                        }
+                    } catch {
+                        Write-Log "[ERROR] Failed to pull Gemma4 model: $_`n$($_.ScriptStackTrace)" "ERROR"
+                        $results["gemma4_model"] = "ERROR"
+                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                    }
+                    
+                    # Substep: nous-hermes2 Model
+                    $global:currentStep++
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Installing"
                     Write-Log "Pulling nous-hermes2 model..." "INFO"
                     try {
                         $proc = Start-Process -FilePath "ollama" -ArgumentList "pull nous-hermes2" -Wait -PassThru -NoNewWindow -ErrorAction Stop
@@ -442,30 +473,43 @@ try {
                     }
                 } else {
                     Write-Log "[WARN] Ollama app started but API is unresponsive." "WARN"
+                    $results["gemma4_model"] = "WARN"
                     $results["hermes_model"] = "WARN"
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                    $global:currentStep++
                     Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
                 }
             } else {
                 Write-Log "[WARN] Ollama executable not found at $ollamaAppPath" "WARN"
+                $results["gemma4_model"] = "ERROR"
                 $results["hermes_model"] = "ERROR"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                $global:currentStep++
                 Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
             }
         } else {
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Failed"
             $global:currentStep++
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+            $global:currentStep++
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
+            $results["gemma4_model"] = "ERROR"
             $results["hermes_model"] = "ERROR"
         }
     } else {
         Write-Log "[SKIP] Ollama (disabled by config)" "INFO"
         $results["ollama"] = "SKIP"
+        $results["gemma4_model"] = "SKIP"
         $results["hermes_model"] = "SKIP"
     }
 } catch {
     Write-Log "Ollama installation/configuration block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
     $results["ollama"] = "ERROR"
+    $results["gemma4_model"] = "ERROR"
     $results["hermes_model"] = "ERROR"
     if ($tools.ollama.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+        $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
     }
 }
@@ -492,25 +536,47 @@ try {
     }
 }
 
-# Order 10: OpenCode
+# Order 10: OpenCode Terminal
 try {
-    if ($tools.opencode.enabled) {
+    if ($tools.'opencode-terminal'.enabled) {
         $global:currentStep++
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.opencode.fileName)"
-        $res = Install-SilentProcess -ToolId "opencode" -ToolName "OpenCode" -InstallerPath $installer -SilentArgs $tools.opencode.silentArgs
-        $results["opencode"] = $res
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.'opencode-terminal'.fileName)"
+        $res = Install-SilentProcess -ToolId "opencode-terminal" -ToolName "OpenCode Terminal" -InstallerPath $installer -SilentArgs $tools.'opencode-terminal'.silentArgs
+        $results["opencode-terminal"] = $res
         $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status $status
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status $status
     } else {
-        Write-Log "[SKIP] OpenCode (disabled by config)" "INFO"
-        $results["opencode"] = "SKIP"
+        Write-Log "[SKIP] OpenCode Terminal (disabled by config)" "INFO"
+        $results["opencode-terminal"] = "SKIP"
     }
 } catch {
-    Write-Log "OpenCode installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    $results["opencode"] = "ERROR"
-    if ($tools.opencode.enabled) {
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status "Failed"
+    Write-Log "OpenCode Terminal installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["opencode-terminal"] = "ERROR"
+    if ($tools.'opencode-terminal'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status "Failed"
+    }
+}
+
+# Order 11: OpenCode Desktop
+try {
+    if ($tools.'opencode-desktop'.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.'opencode-desktop'.fileName)"
+        $res = Install-SilentProcess -ToolId "opencode-desktop" -ToolName "OpenCode Desktop" -InstallerPath $installer -SilentArgs $tools.'opencode-desktop'.silentArgs
+        $results["opencode-desktop"] = $res
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status $status
+    } else {
+        Write-Log "[SKIP] OpenCode Desktop (disabled by config)" "INFO"
+        $results["opencode-desktop"] = "SKIP"
+    }
+} catch {
+    Write-Log "OpenCode Desktop installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["opencode-desktop"] = "ERROR"
+    if ($tools.'opencode-desktop'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status "Failed"
     }
 }
 
@@ -575,38 +641,274 @@ try {
     }
 }
 
-# Placeholder Check: Antigravity 2.0 / IDE / CLI
+# Order 13: Visual Studio Code
 try {
-    $global:currentStep++
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Installing"
-    Write-Log "Running check for Antigravity 2.0 (Placeholder)..." "INFO"
-    try {
-        # Force TLS 1.2
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $response = Invoke-WebRequest -Uri "https://antigravity.google/download" -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
-        Write-Log "[OK] Antigravity 2.0 endpoint reached." "INFO"
-        $results["antigravity"] = "OK"
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Completed"
-    } catch {
-        Write-Log "[SKIP] Antigravity 2.0 - source unverified or unreachable." "INFO"
-        $results["antigravity"] = "SKIP"
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Completed"
+    if ($tools.vscode.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Code" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.vscode.fileName)"
+        $res = Install-SilentProcess -ToolId "vscode" -ToolName "Visual Studio Code" -InstallerPath $installer -SilentArgs $tools.vscode.silentArgs
+        $results["vscode"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Code" -Status $status
+    } else {
+        Write-Log "[SKIP] Visual Studio Code (disabled by config)" "INFO"
+        $results["vscode"] = "SKIP"
     }
 } catch {
-    Write-Log "Antigravity check failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Failed"
+    Write-Log "Visual Studio Code installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["vscode"] = "ERROR"
+    if ($tools.vscode.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Code" -Status "Failed"
+    }
 }
 
-# Placeholder Check: Hermes Agent CLI
+# Order 14: Visual Studio Community
 try {
-    $global:currentStep++
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Installing"
-    Write-Log "[INFO] Hermes Agent: no official CLI binary available; nous-hermes2 was loaded via Ollama as a substitute." "INFO"
-    $results["hermes_agent"] = "SKIP"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Completed"
+    if ($tools.vscommunity.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Community" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.vscommunity.fileName)"
+        $res = Install-SilentProcess -ToolId "vscommunity" -ToolName "Visual Studio Community" -InstallerPath $installer -SilentArgs $tools.vscommunity.silentArgs
+        $results["vscommunity"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Community" -Status $status
+    } else {
+        Write-Log "[SKIP] Visual Studio Community (disabled by config)" "INFO"
+        $results["vscommunity"] = "SKIP"
+    }
 } catch {
-    Write-Log "Hermes check failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Failed"
+    Write-Log "Visual Studio Community installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["vscommunity"] = "ERROR"
+    if ($tools.vscommunity.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Community" -Status "Failed"
+    }
+}
+
+# Order 15: 7-Zip
+try {
+    if ($tools.'7zip'.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "7-Zip" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.'7zip'.fileName)"
+        $res = Install-SilentProcess -ToolId "7zip" -ToolName "7-Zip" -InstallerPath $installer -SilentArgs $tools.'7zip'.silentArgs
+        $results["7zip"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "7-Zip" -Status $status
+    } else {
+        Write-Log "[SKIP] 7-Zip (disabled by config)" "INFO"
+        $results["7zip"] = "SKIP"
+    }
+} catch {
+    Write-Log "7-Zip installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["7zip"] = "ERROR"
+    if ($tools.'7zip'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "7-Zip" -Status "Failed"
+    }
+}
+
+# Order 16: Sysinternals Suite (ZIP extraction)
+try {
+    if ($tools.sysinternals.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Installing"
+        $zipFile = "C:\SharedTools\Installers\$($tools.sysinternals.fileName)"
+        $extractPath = "C:\Tools\Sysinternals"
+        
+        if (Test-Path $zipFile) {
+            Write-Log "Extracting Sysinternals Suite..." "INFO"
+            try {
+                if (-not (Test-Path $extractPath)) {
+                    $null = New-Item -ItemType Directory -Path $extractPath -Force -ErrorAction Stop
+                }
+                Expand-Archive -Path $zipFile -DestinationPath $extractPath -Force -ErrorAction Stop
+                
+                # Add to PATH
+                $currentPath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+                if ($currentPath -notlike "*$extractPath*") {
+                    [System.Environment]::SetEnvironmentVariable("Path", "$currentPath;$extractPath", [System.EnvironmentVariableTarget]::Machine)
+                    Write-Log "[OK] Sysinternals added to PATH." "INFO"
+                }
+                
+                Write-Log "[OK] Sysinternals Suite extracted to $extractPath" "INFO"
+                $results["sysinternals"] = "OK"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Completed"
+            } catch {
+                Write-Log "[ERROR] Failed to extract Sysinternals: $_`n$($_.ScriptStackTrace)" "ERROR"
+                $results["sysinternals"] = "ERROR"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
+            }
+        } else {
+            Write-Log "[WARN] Sysinternals ZIP not found at $zipFile" "WARN"
+            $results["sysinternals"] = "ERROR"
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
+        }
+    } else {
+        Write-Log "[SKIP] Sysinternals Suite (disabled by config)" "INFO"
+        $results["sysinternals"] = "SKIP"
+    }
+} catch {
+    Write-Log "Sysinternals installation block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["sysinternals"] = "ERROR"
+    if ($tools.sysinternals.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
+    }
+}
+
+# Order 17: Windows PowerToys
+try {
+    if ($tools.powertoys.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows PowerToys" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.powertoys.fileName)"
+        $res = Install-SilentProcess -ToolId "powertoys" -ToolName "Windows PowerToys" -InstallerPath $installer -SilentArgs $tools.powertoys.silentArgs
+        $results["powertoys"] = $res
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows PowerToys" -Status $status
+    } else {
+        Write-Log "[SKIP] Windows PowerToys (disabled by config)" "INFO"
+        $results["powertoys"] = "SKIP"
+    }
+} catch {
+    Write-Log "Windows PowerToys installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["powertoys"] = "ERROR"
+    if ($tools.powertoys.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows PowerToys" -Status "Failed"
+    }
+}
+
+# Order 18: Windows SDK
+try {
+    if ($tools.windowssdk.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows SDK" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.windowssdk.fileName)"
+        $res = Install-SilentProcess -ToolId "windowssdk" -ToolName "Windows SDK" -InstallerPath $installer -SilentArgs $tools.windowssdk.silentArgs
+        $results["windowssdk"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows SDK" -Status $status
+    } else {
+        Write-Log "[SKIP] Windows SDK (disabled by config)" "INFO"
+        $results["windowssdk"] = "SKIP"
+    }
+} catch {
+    Write-Log "Windows SDK installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["windowssdk"] = "ERROR"
+    if ($tools.windowssdk.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows SDK" -Status "Failed"
+    }
+}
+
+# Order 19: Windows ADK
+try {
+    if ($tools.adk.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.adk.fileName)"
+        $res = Install-SilentProcess -ToolId "adk" -ToolName "Windows ADK" -InstallerPath $installer -SilentArgs $tools.adk.silentArgs
+        $results["adk"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK" -Status $status
+    } else {
+        Write-Log "[SKIP] Windows ADK (disabled by config)" "INFO"
+        $results["adk"] = "SKIP"
+    }
+} catch {
+    Write-Log "Windows ADK installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["adk"] = "ERROR"
+    if ($tools.adk.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK" -Status "Failed"
+    }
+}
+
+# Order 20: Windows ADK WinPE Add-on
+try {
+    if ($tools.adkwinpe.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK WinPE Add-on" -Status "Installing"
+        $installer = "C:\SharedTools\Installers\$($tools.adkwinpe.fileName)"
+        $res = Install-SilentProcess -ToolId "adkwinpe" -ToolName "Windows ADK WinPE Add-on" -InstallerPath $installer -SilentArgs $tools.adkwinpe.silentArgs
+        $results["adkwinpe"] = $res
+        Refresh-Path
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK WinPE Add-on" -Status $status
+    } else {
+        Write-Log "[SKIP] Windows ADK WinPE Add-on (disabled by config)" "INFO"
+        $results["adkwinpe"] = "SKIP"
+    }
+} catch {
+    Write-Log "Windows ADK WinPE Add-on installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["adkwinpe"] = "ERROR"
+    if ($tools.adkwinpe.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK WinPE Add-on" -Status "Failed"
+    }
+}
+
+# Order 21: Antigravity CLI
+try {
+    if ($tools.antigravity.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Installing"
+        
+        # Try to download and install Antigravity CLI
+        Write-Log "Attempting to download Antigravity CLI..." "INFO"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            
+            # Check if the download URL is accessible
+            $antigravityUrl = "https://antigravity.google/product/antigravity-cli"
+            $antigravityInstaller = "C:\SharedTools\Installers\antigravity-cli.exe"
+            
+            # Try to resolve the download URL
+            try {
+                $response = Invoke-WebRequest -Uri $antigravityUrl -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+                # If the page is accessible, try to find the download link
+                if ($response.Content -match 'href="([^"]*antigravity[^"]*\.exe)"') {
+                    $downloadUrl = $Matches[1]
+                    if (-not $downloadUrl.StartsWith("http")) {
+                        $downloadUrl = "https://antigravity.google$downloadUrl"
+                    }
+                    Write-Log "Downloading Antigravity CLI from: $downloadUrl" "INFO"
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $antigravityInstaller -UseBasicParsing -ErrorAction Stop
+                    
+                    if (Test-Path $antigravityInstaller) {
+                        $res = Install-SilentProcess -ToolId "antigravity" -ToolName "Antigravity CLI" -InstallerPath $antigravityInstaller -SilentArgs "/S"
+                        $results["antigravity"] = $res
+                    } else {
+                        Write-Log "[SKIP] Antigravity CLI - download failed" "INFO"
+                        $results["antigravity"] = "SKIP"
+                    }
+                } else {
+                    Write-Log "[SKIP] Antigravity CLI - no download link found on page" "INFO"
+                    $results["antigravity"] = "SKIP"
+                }
+            } catch {
+                Write-Log "[SKIP] Antigravity CLI - source unreachable or not available: $_" "INFO"
+                $results["antigravity"] = "SKIP"
+            }
+            
+            $status = if ($results["antigravity"] -eq "OK") { "Completed" } else { "Skipped" }
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status $status
+        } catch {
+            Write-Log "[SKIP] Antigravity CLI - installation failed: $_" "INFO"
+            $results["antigravity"] = "SKIP"
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Skipped"
+        }
+    } else {
+        Write-Log "[SKIP] Antigravity CLI (disabled by config)" "INFO"
+        $results["antigravity"] = "SKIP"
+    }
+} catch {
+    Write-Log "Antigravity CLI installation block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["antigravity"] = "ERROR"
+    if ($tools.antigravity.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Failed"
+    }
 }
 
 # 3. Print Summary

@@ -93,8 +93,8 @@
       "skipFlag": "SkipLMStudio",
       "order": 8
     },
-    "opencode": {
-      "name": "OpenCode",
+    "opencode-terminal": {
+      "name": "OpenCode Terminal",
       "enabled": true,
       "downloadType": "direct",
       "url": "https://opencode.ai/download",
@@ -104,6 +104,16 @@
       "skipFlag": "SkipOpenCode",
       "order": 9
     },
+    "opencode-desktop": {
+      "name": "OpenCode Desktop",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://opencode.ai/download",
+      "fileName": "OpenCode Desktop Installer.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipOpenCodeDesktop",
+      "order": 10
+    },
     "crewai": {
       "name": "Crew AI",
       "enabled": true,
@@ -112,7 +122,7 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCrewAI",
-      "order": 10
+      "order": 11
     },
     "copilot": {
       "name": "Microsoft Copilot PWA",
@@ -122,7 +132,101 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCopilot",
-      "order": 11
+      "order": 12
+    },
+    "vscode": {
+      "name": "Visual Studio Code",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
+      "fileName": "VSCodeSetup.exe",
+      "silentArgs": "/verysilent /mergetasks=!runcode,addcontextmenufiles,addcontextmenufolders,addtopath",
+      "skipFlag": "SkipVSCode",
+      "order": 13
+    },
+    "vscommunity": {
+      "name": "Visual Studio Community",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://aka.ms/vs/17/release/vs_community.exe",
+      "fileName": "vs_community.exe",
+      "silentArgs": "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.VisualStudio.Workload.NativeDesktop --add Microsoft.VisualStudio.Workload.Node",
+      "skipFlag": "SkipVSCommunity",
+      "order": 14
+    },
+    "7zip": {
+      "name": "7-Zip",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/ip7z/7zip/releases/latest",
+      "fallbackUrl": "https://www.7-zip.org/a/7z2409-x64.exe",
+      "assetRegex": "7z.*x64\\.exe",
+      "fileName": "7zip-installer.exe",
+      "silentArgs": "/S",
+      "skipFlag": "Skip7Zip",
+      "order": 15
+    },
+    "sysinternals": {
+      "name": "Sysinternals Suite",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://download.sysinternals.com/files/SysinternalsSuite.zip",
+      "fileName": "SysinternalsSuite.zip",
+      "silentArgs": "",
+      "skipFlag": "SkipSysinternals",
+      "order": 16
+    },
+    "powertoys": {
+      "name": "Windows PowerToys",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/microsoft/PowerToys/releases/latest",
+      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.81.1/PowerToysSetup-0.81.1-x64.exe",
+      "assetRegex": "PowerToysSetup.*x64\\.exe",
+      "fileName": "PowerToysSetup.exe",
+      "silentArgs": "/silent /norestart",
+      "skipFlag": "SkipPowerToys",
+      "order": 17
+    },
+    "windowssdk": {
+      "name": "Windows SDK",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/p/?linkid=2237387",
+      "fileName": "WindowsSDK.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipWindowsSDK",
+      "order": 18
+    },
+    "adk": {
+      "name": "Windows ADK",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/?linkid=2289980",
+      "fileName": "adksetup.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipADK",
+      "order": 19
+    },
+    "adkwinpe": {
+      "name": "Windows ADK WinPE Add-on",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/?linkid=2289981",
+      "fileName": "adkwinpeaddonssetup.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipADKWinPE",
+      "order": 20
+    },
+    "antigravity": {
+      "name": "Antigravity CLI",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://antigravity.google/product/antigravity-cli",
+      "fileName": "antigravity-cli.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipAntigravity",
+      "order": 21
     }
   }
 }

@@ -1,5 +1,52 @@
 # Changelog
 
+## [2026.06.14.16.28] — 2026-06-14
+
+### Added
+- **Visual Studio Code** — Silent install with context menu and PATH integration
+- **Visual Studio Community** — Full IDE with .NET, C++, and Node.js workloads
+- **7-Zip** — File archiver with silent install
+- **Sysinternals Suite** — ZIP extraction to `C:\Tools\Sysinternals` with PATH
+- **Windows PowerToys** — Utility suite for Windows
+- **Windows SDK** — Development tools for Windows apps
+- **Windows ADK** — Assessment and Deployment Kit
+- **Windows ADK WinPE Add-on** — WinPE add-on for ADK
+- **OpenCode Terminal** — CLI installer (renamed from "OpenCode")
+- **OpenCode Desktop** — Desktop GUI installer
+- **Gemma4 Model** — Auto-pulled after Ollama installation
+- **Antigravity CLI** — Attempted download/install (if available)
+
+### Changed
+- Updated installation order to include all new tools
+- Ollama now pulls both Gemma4 AND nous-hermes2 models
+- Removed placeholder checks (Antigravity 2.0, Hermes Agent CLI)
+
+### Full installation order
+1. Node.js + npm
+2. Python
+3. Google Chrome
+4. Page Assist Extension
+5. Brave Browser
+6. Notepad++
+7. Beyond Compare 4
+8. Ollama → Gemma4 → nous-hermes2
+9. LM Studio
+10. OpenCode Terminal
+11. OpenCode Desktop
+12. Crew AI
+13. Microsoft Copilot PWA
+14. Visual Studio Code
+15. Visual Studio Community
+16. 7-Zip
+17. Sysinternals Suite
+18. Windows PowerToys
+19. Windows SDK
+20. Windows ADK
+21. Windows ADK WinPE Add-on
+22. Antigravity CLI (if available)
+
+---
+
 ## [1.1.0] — 2026-06-14
 
 ### Added
