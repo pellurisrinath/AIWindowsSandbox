@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026.06.14.16.11] — 2026-06-14
+
+### Added
+- Version-aware installer caching: skip re-downloading if latest version is already present
+- `Test-InstallerAlreadyCached` helper function with hash-based verification
+- Fallback file size check for tools without SHA-256 hashes
+- Cache check now prioritizes final `$installerPath` over staging folder
+
+### Changed
+- All download blocks (`direct`, `nodejs`, `github`, `scootersoftware`) now check final installer path first
+- Improved logging for cache hits/misses with file size information
+
+---
+
 ## [1.1.0] — 2026-06-14
 
 ### Added

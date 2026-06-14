@@ -381,6 +381,54 @@ function Verify-DownloadedBinaryContent {
     }
 }
 
+# Helper: Check if installer is already cached and valid (hash or file size)
+function Test-InstallerAlreadyCached {
+    param(
+        [string]$InstallerPath,
+        [string]$ExpectedHash,
+        [long]$ExpectedSize = 0
+    )
+    
+    if (-not (Test-Path $InstallerPath)) {
+        return $false
+    }
+    
+    $fileInfo = Get-Item $InstallerPath
+    $fileSize = $fileInfo.Length
+    
+    # If hash is defined, verify by hash (most reliable)
+    if (-not [string]::IsNullOrEmpty($ExpectedHash)) {
+        try {
+            $fileHash = (Get-FileHash -Path $InstallerPath -Algorithm SHA256).Hash
+            if ($fileHash -eq $ExpectedHash) {
+                Write-Log "Cache HIT (hash verified): $(Split-Path $InstallerPath -Leaf) - $([Math]::Round($fileSize/1MB, 1)) MB" "INFO"
+                return $true
+            } else {
+                Write-Log "Cache MISS (hash mismatch): $(Split-Path $InstallerPath -Leaf) - Expected: $ExpectedHash, Got: $fileHash" "WARN"
+                return $false
+            }
+        } catch {
+            Write-Log "Hash verification failed for $(Split-Path $InstallerPath -Leaf): $_" "WARN"
+        }
+    }
+    
+    # Fallback: Check file size if expected size is provided (size > 100KB indicates real installer)
+    if ($ExpectedSize -gt 0 -and $fileSize -eq $ExpectedSize) {
+        Write-Log "Cache HIT (size verified): $(Split-Path $InstallerPath -Leaf) - $([Math]::Round($fileSize/1MB, 1)) MB" "INFO"
+        return $true
+    }
+    
+    # If file exists and is > 100KB, assume it's a valid installer (no hash/size to verify against)
+    if ($fileSize -gt 100KB) {
+        Write-Log "Cache HIT (exists, no hash/size to verify): $(Split-Path $InstallerPath -Leaf) - $([Math]::Round($fileSize/1MB, 1)) MB" "INFO"
+        return $true
+    }
+    
+    # File exists but too small — likely corrupted/incomplete
+    Write-Log "Cache MISS (file too small): $(Split-Path $InstallerPath -Leaf) - $fileSize bytes" "WARN"
+    return $false
+}
+
 # Helper: Invoke Windows Defender Threat Scanning
 function Invoke-DefenderScan {
     param(
@@ -515,6 +563,11 @@ function Invoke-SandboxLaunch {
             }
 
             if ($tool.downloadType -eq "direct") {
+                # Check final installer path first (user's existing cache)
+                if ($destFile -and (Test-InstallerAlreadyCached -InstallerPath $destFile -ExpectedHash $tool.hash)) {
+                    Write-Log "Using cached installer from share: $($tool.fileName)" "INFO"
+                    continue
+                }
                 if (-not (Test-Path $stagingFile)) {
                     try {
                         Download-FileWithProgress -Uri $tool.url -OutFile $stagingFile
@@ -538,6 +591,11 @@ function Invoke-SandboxLaunch {
                 }
             }
             elseif ($tool.downloadType -eq "nodejs") {
+                # Check final installer path first (user's existing cache)
+                if ($destFile -and (Test-InstallerAlreadyCached -InstallerPath $destFile -ExpectedHash $tool.hash)) {
+                    Write-Log "Using cached installer from share: $($tool.fileName)" "INFO"
+                    continue
+                }
                 if (-not (Test-Path $stagingFile)) {
                     $resolvedUrl = Get-NodeLtsUrl -BaseUrl $tool.url
                     Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
@@ -549,6 +607,11 @@ function Invoke-SandboxLaunch {
                 }
             }
             elseif ($tool.downloadType -eq "github") {
+                # Check final installer path first (user's existing cache)
+                if ($destFile -and (Test-InstallerAlreadyCached -InstallerPath $destFile -ExpectedHash $tool.hash)) {
+                    Write-Log "Using cached installer from share: $($tool.fileName)" "INFO"
+                    continue
+                }
                 if (-not (Test-Path $stagingFile)) {
                     $resolvedUrl = Get-GitHubReleaseAssetUrl -ApiUrl $tool.url -RegexPattern $tool.assetRegex
                     if (-not $resolvedUrl -and $tool.fallbackUrl) {
@@ -568,6 +631,11 @@ function Invoke-SandboxLaunch {
                 }
             }
             elseif ($tool.downloadType -eq "scootersoftware") {
+                # Check final installer path first (user's existing cache)
+                if ($destFile -and (Test-InstallerAlreadyCached -InstallerPath $destFile -ExpectedHash $tool.hash)) {
+                    Write-Log "Using cached installer from share: $($tool.fileName)" "INFO"
+                    continue
+                }
                 if (-not (Test-Path $stagingFile)) {
                     $resolvedUrl = Get-BeyondCompareUrl -Url $tool.url
                     Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
