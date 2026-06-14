@@ -123,7 +123,8 @@ The host machine requires internet access at launch time to download installers.
 | **RAM** | 16 GB (8 GB allocated to sandbox + 8 GB for host) |
 | **Disk (free)** | 40 GB free on the system drive |
 | **GPU** | Optional — integrated graphics |
-| **OS** | Windows 11 Pro / Enterprise / Education |
+| **OS** | Windows 11 Pro / Enterprise / Education, **24H2 (Build 26100) or 25H2 (Build 26200)**, x64 |
+| **Architecture** | x64 (64-bit) only — ARM64 and x86 are not supported |
 | **BIOS** | Virtualisation enabled (VT-x or AMD-V) |
 | **Hyper-V** | Must be supported and not blocked by host hypervisor |
 
@@ -146,7 +147,7 @@ The host machine requires internet access at launch time to download installers.
 - **Hyper-V is not blocked** by a third-party hypervisor (e.g. VMware Workstation in legacy mode). If running inside a VM, ensure nested virtualisation is enabled on the host hypervisor.
 - **Disk is SSD**. Installer extraction and sandbox provisioning will be very slow on spinning HDDs, especially for Visual Studio and Windows ADK/SDK.
 - **No proxy / corporate firewall** blocks direct downloads from Microsoft, GitHub, and vendor CDNs. If behind a proxy, configure `$env:HTTP_PROXY` before running.
-- **Windows is up to date**. The script targets Windows 11 22H2 or later. Older builds may have sandbox feature limitations.
+- **Windows is up to date**. The script targets **Windows 11 24H2 (Build 26100) or Windows 11 25H2 (Build 26200)**. Older builds (21H2, 22H2, 23H2) are not supported and the launcher will refuse to start. Update via Settings > Windows Update.
 - **GPU drivers are up to date** if vGPU is expected for AI inference inside the sandbox.
 
 ---

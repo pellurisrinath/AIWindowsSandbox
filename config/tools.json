@@ -1,4 +1,11 @@
 {
+  "_metadata": {
+    "targetOS": "Windows 11 24H2 or 25H2",
+    "minBuildNumber": 26100,
+    "recommendedBuildNumber": 26200,
+    "architecture": "x64",
+    "supportedEditions": ["Pro", "Enterprise", "Education"]
+  },
   "tools": {
     "python": {
       "name": "Python",

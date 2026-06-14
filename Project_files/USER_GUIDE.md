@@ -24,15 +24,18 @@ When you close the sandbox window, **everything inside it is deleted** — your 
 
 Go through this checklist **before** running any scripts. Skipping steps here is the #1 cause of problems.
 
-### ✅ 1. Confirm your Windows edition
+### ✅ 1. Confirm your Windows edition and version
 
 Windows Sandbox **does not work** on Windows 11 Home edition.
 
-To check your edition:
+To check your edition and version:
 1. Press `Win + R`, type `winver`, press **Enter**
-2. Look for the edition in the dialog
+2. Look for the edition and OS Build number in the dialog
+3. **Required:** Windows 11 **24H2 (Build 26100)** or **25H2 (Build 26200)**, Pro / Enterprise / Education edition, **x64 architecture**
 
 **Required editions:** Windows 11 Pro, Enterprise, or Education
+**Required version:** Windows 11 24H2 (Build 26100) or later
+**Required architecture:** x64 (64-bit) only
 
 ---
 

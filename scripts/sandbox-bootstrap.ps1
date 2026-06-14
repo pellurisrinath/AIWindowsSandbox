@@ -63,6 +63,50 @@ function Write-Log {
 
 Write-Log "=== Windows AI Sandbox Provisioning Started ===" "INFO"
 
+# Detect Sandbox OS (Windows 11 24H2/25H2 x64)
+try {
+    $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    $build = [int]$osInfo.BuildNumber
+    $osCaption = $osInfo.Caption
+    $osArch = $osInfo.OSArchitecture
+
+    $sandboxVerName = switch ($build) {
+        26100 { "Windows 11 24H2" }
+        26200 { "Windows 11 25H2" }
+        default { "Windows (Build $build)" }
+    }
+    Write-Log "Sandbox OS detected: $osCaption - $sandboxVerName ($osArch)" "INFO"
+
+    # Verify x64 architecture
+    if ($osArch -ne "64-bit") {
+        Write-Log "Unsupported architecture in sandbox: $osArch. Only x64 (64-bit) is supported." "ERROR"
+        Exit-Script 1
+    }
+
+    # Verify minimum OS build (24H2 = 26100, 25H2 = 26200)
+    $minBuild = 26100
+    if ($build -lt $minBuild) {
+        Write-Log "Sandbox is running $sandboxVerName. Minimum required: Windows 11 24H2 (Build 26100) or later." "ERROR"
+        Write-Log "Please update your HOST Windows installation to 24H2 or 25H2." "ERROR"
+        Exit-Script 1
+    }
+
+    Write-Log "[OK] Sandbox meets requirements: $sandboxVerName x64" "INFO"
+
+    # Export OS info for use by tool installers
+    $global:SandboxOS = @{
+        Caption     = $osCaption
+        BuildNumber = $build
+        Architecture = $osArch
+        VersionName = $sandboxVerName
+        Is24H2 = ($build -eq 26100)
+        Is25H2 = ($build -ge 26200)
+    }
+} catch {
+    Write-Log "Failed to detect sandbox OS: $_" "WARN"
+    $global:SandboxOS = $null
+}
+
 # 1. Read configuration
 try {
     $configPath = "C:\SharedTools\install-config.json"
@@ -72,6 +116,13 @@ try {
     }
     $config = Get-Content -Raw -Path $configPath -ErrorAction Stop | ConvertFrom-Json
     $tools = $config.tools
+
+    # Read host OS info from install-config.json
+    if ($config.PSObject.Properties.Name -contains 'hostOS') {
+        $hostOS = $config.hostOS
+        Write-Log "Host OS reported: $($hostOS.Caption) (Build $($hostOS.BuildNumber), Target: $($hostOS.TargetVersion))" "INFO"
+        $global:HostOS = $hostOS
+    }
 
     $enabledSteps = [System.Collections.Generic.List[string]]::new()
     if ($tools.nodejs.enabled) { [void]$enabledSteps.Add("Node.js + npm") }
@@ -1149,6 +1200,15 @@ $verifyReportPath = Join-Path $logsDir "final-verification.txt"
 try {
     $report = "Final Verification Report - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n"
     $report += "=" * 60 + "`n`n"
+    if ($global:SandboxOS) {
+        $report += "Sandbox OS: $($global:SandboxOS.Caption) - $($global:SandboxOS.VersionName) ($($global:SandboxOS.Architecture))`n"
+        $report += "Build Number: $($global:SandboxOS.BuildNumber)`n"
+    }
+    if ($global:HostOS) {
+        $report += "Host OS: $($global:HostOS.Caption) - Target: $($global:HostOS.TargetVersion)`n"
+    }
+    $report += "`n"
+    $report += "Tool Verification:`n"
     foreach ($toolName in $finalVerify.Keys) {
         $status = if ($finalVerify[$toolName]) { "PRESENT" } else { "MISSING" }
         $report += "$toolName : $status`n"

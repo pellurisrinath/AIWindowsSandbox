@@ -102,6 +102,80 @@ function Exit-Script {
     }
 }
 
+# Helper: Get host OS information
+function Get-HostOSInfo {
+    try {
+        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        $arch = (Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue).Architecture
+        # Architecture: 0=x86, 9=x64, 12=ARM64
+        $archName = switch ($arch) {
+            9 { "x64" }
+            12 { "ARM64" }
+            0 { "x86" }
+            default { "Unknown" }
+        }
+        return [PSCustomObject]@{
+            Caption       = $osInfo.Caption
+            Version       = $osInfo.Version
+            BuildNumber   = [int]$osInfo.BuildNumber
+            OSArchitecture = $osInfo.OSArchitecture
+            ProcessorArch = $archName
+            ProductType   = $osInfo.ProductType  # 1=Workstation, 2=DC, 3=Server
+        }
+    } catch {
+        Write-Log "Failed to detect host OS: $_" "WARN"
+        return $null
+    }
+}
+
+# Helper: Check if host meets Windows 11 24H2/25H2 x64 requirements
+function Test-HostOSRequirements {
+    $osInfo = Get-HostOSInfo
+    if ($null -eq $osInfo) {
+        Write-Log "Cannot determine host OS. Proceeding at your own risk." "WARN"
+        return $true
+    }
+
+    Write-Log "Host OS detected: $($osInfo.Caption) (Build $($osInfo.BuildNumber), $($osInfo.OSArchitecture))" "INFO"
+
+    # Check architecture - must be x64
+    if ($osInfo.ProcessorArch -ne "x64") {
+        Write-Log "Unsupported architecture: $($osInfo.ProcessorArch). Only x64 (64-bit) is supported." "ERROR"
+        return $false
+    }
+
+    # Check Windows version - must be 24H2 (Build 26100) or 25H2 (Build 26200)
+    $minBuild = 26100  # Windows 11 24H2
+    if ($osInfo.BuildNumber -lt $minBuild) {
+        $verName = switch ($osInfo.BuildNumber) {
+            22000 { "Windows 11 21H2" }
+            22621 { "Windows 11 22H2" }
+            22631 { "Windows 11 23H2" }
+            default { "Windows (Build $($osInfo.BuildNumber))" }
+        }
+        Write-Log "Host OS is $verName. Minimum required: Windows 11 24H2 (Build 26100) or later." "ERROR"
+        Write-Log "Please update Windows to version 24H2 or 25H2 via Settings > Windows Update." "ERROR"
+        return $false
+    }
+
+    # Check Windows edition - Home is not supported for Windows Sandbox
+    $edition = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name EditionID -ErrorAction SilentlyContinue).EditionID
+    if ($edition -match "Home") {
+        Write-Log "Windows 11 Home edition detected. Windows Sandbox is NOT supported on Home edition." "ERROR"
+        Write-Log "Required: Windows 11 Pro, Enterprise, or Education." "ERROR"
+        return $false
+    }
+
+    # All checks passed
+    $verName = switch ($osInfo.BuildNumber) {
+        26100 { "Windows 11 24H2" }
+        26200 { "Windows 11 25H2" }
+        default { "Windows (Build $($osInfo.BuildNumber))" }
+    }
+    Write-Log "[OK] Host meets requirements: $verName x64 ($edition)" "INFO"
+    return $true
+}
+
 if ($FallbackUsed) {
     Write-Log "Failed to create log directory at C:\ProgramData\AIWindowsSandbox\Logs. Falling back to $LogsDir." "WARN"
 }
@@ -150,6 +224,11 @@ try {
     }
 } catch {
     Write-Log "Error checking or enabling Windows Sandbox feature: $_`n$($_.ScriptStackTrace)" "ERROR"
+    Exit-Script 1
+}
+
+# 2.5 Check Host OS Requirements (Windows 11 24H2/25H2 x64)
+if (-not (Test-HostOSRequirements)) {
     Exit-Script 1
 }
 
@@ -776,6 +855,22 @@ function Invoke-SandboxLaunch {
 
     # 6. Save Configuration to Shared Path
     try {
+        # Add host OS info to install-config.json
+        $hostOS = Get-HostOSInfo
+        if ($null -ne $hostOS) {
+            $Script:installConfig.hostOS = @{
+                Caption       = $hostOS.Caption
+                Version       = $hostOS.Version
+                BuildNumber   = $hostOS.BuildNumber
+                Architecture  = $hostOS.OSArchitecture
+                ProcessorArch = $hostOS.ProcessorArch
+                TargetVersion = switch ($hostOS.BuildNumber) {
+                    { $_ -ge 26200 } { "Windows 11 25H2" }
+                    { $_ -ge 26100 } { "Windows 11 24H2" }
+                    default { "Unknown" }
+                }
+            }
+        }
         $Script:installConfig | ConvertTo-Json -Depth 5 | Out-File -FilePath (Join-Path $sharePath "install-config.json") -Encoding utf8 -ErrorAction Stop
         $toolsJsonFileDestination = Join-Path $configPath "tools.json"
         Copy-Item -Path $toolsJsonFile -Destination $toolsJsonFileDestination -Force -ErrorAction Stop
@@ -800,7 +895,14 @@ function Invoke-SandboxLaunch {
 
     # 9. Generate WSB Configuration
     try {
+        # Windows Sandbox inherits host OS - we target Windows 11 24H2/25H2 x64
         $wsbContent = @"
+<!--
+    Windows Sandbox Configuration
+    Target: Windows 11 24H2 (Build 26100) or 25H2 (Build 26200) - x64
+    Architecture: 64-bit (x64) only
+    The Sandbox VM mirrors the host's Windows version.
+-->
 <Configuration>
   <vGPU>Enable</vGPU>
   <Networking>Enable</Networking>

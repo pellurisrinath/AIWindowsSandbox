@@ -1,5 +1,27 @@
 # Changelog
 
+## [2026.06.14.23.09] — 2026-06-14
+
+### Changed
+- **Target Windows Sandbox to Windows 11 25H2 (Build 26200)** with backwards compatibility for 24H2 (Build 26100)
+- **Architecture: x64 only** — script now detects and refuses to run on ARM64 or x86
+
+### Added
+- **`Get-HostOSInfo` function** in `Launch-AISandbox.ps1` — detects host Windows version, build, and architecture
+- **`Test-HostOSRequirements` function** in `Launch-AISandbox.ps1` — validates host meets requirements before launch (24H2+/x64/Pro+Edition)
+- **In-sandbox OS detection** in `scripts/sandbox-bootstrap.ps1` — detects Windows version, refuses to run on non-24H2/25H2
+- **OS info in `install-config.json`** — host OS metadata passed to bootstrap script
+- **OS info in verification report** — final-verification.txt now includes sandbox and host OS details
+- **`_metadata` section in `config/tools.json`** — documents target OS, min build, architecture, supported editions
+- **WSB config comment** — documents target OS/architecture in the generated `.wsb` file
+- **Implementation plan document** at `Project_files/ImplementationPlan_14June2026_2309_CET.md`
+
+### Updated
+- `Project_files/README.md` — system requirements now specify 24H2/25H2 x64
+- `Project_files/USER_GUIDE.md` — version check section updated
+
+---
+
 ## [2026.06.14.20.00] — 2026-06-14
 
 ### Fixed
