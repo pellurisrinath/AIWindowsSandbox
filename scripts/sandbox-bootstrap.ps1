@@ -203,6 +203,64 @@ function Install-SilentProcess {
     }
 }
 
+# Helper to verify post-install artifacts
+function Test-InstallationArtifacts {
+    param(
+        [string]$ToolId,
+        [string]$ToolName,
+        [string[]]$ExpectedPaths,
+        [string[]]$ExpectedCommands
+    )
+    
+    $found = 0
+    $total = 0
+    $details = @()
+    
+    # Check expected file paths
+    foreach ($path in $ExpectedPaths) {
+        $total++
+        if ($path -and (Test-Path $path)) {
+            $found++
+            $details += "  [OK] File present: $path"
+        } else {
+            $details += "  [MISSING] File NOT found: $path"
+        }
+    }
+    
+    # Check expected commands
+    foreach ($cmd in $ExpectedCommands) {
+        $total++
+        $cmdPath = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($cmdPath) {
+            $found++
+            $details += "  [OK] Command available: $cmd -> $($cmdPath.Source)"
+        } else {
+            $details += "  [MISSING] Command NOT found: $cmd"
+        }
+    }
+    
+    if ($total -eq 0) {
+        Write-Log "[VERIFY] $ToolName - no verification artifacts defined" "INFO"
+        return "OK"
+    }
+    
+    $percent = [Math]::Round(($found / $total) * 100, 0)
+    foreach ($detail in $details) {
+        Write-Log $detail "INFO"
+    }
+    
+    if ($found -eq $total) {
+        Write-Log "[VERIFY] [OK] $ToolName - all $total artifacts present (100%)" "OK"
+        return "OK"
+    } elseif ($found -gt 0) {
+        Write-Log "[VERIFY] [WARN] $ToolName - only $found of $total artifacts present ($percent%)" "WARN"
+        return "WARN"
+    } else {
+        Write-Log "[VERIFY] [ERROR] $ToolName - none of the $total expected artifacts found (0%)" "ERROR"
+        return "ERROR"
+    }
+}
+
 $results = @{}
 
 # Order 1: Node.js
@@ -214,7 +272,11 @@ try {
         $res = Install-SilentProcess -ToolId "nodejs" -ToolName "Node.js + npm" -InstallerPath $installer -SilentArgs $tools.nodejs.silentArgs
         $results["nodejs"] = $res
         Refresh-Path
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "nodejs" -ToolName "Node.js + npm" -ExpectedPaths @("C:\Program Files\nodejs\node.exe", "C:\Program Files (x86)\nodejs\node.exe") -ExpectedCommands @("node", "npm")
+            if ($verifyRes -ne "OK") { $results["nodejs"] = $verifyRes }
+        }
+        $status = if ($results["nodejs"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Node.js + npm" -Status $status
     } else {
         Write-Log "[SKIP] Node.js + npm (disabled by config)" "INFO"
@@ -248,28 +310,29 @@ try {
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "[OK] Python installed successfully." "INFO"
                         $results["python"] = "OK"
-                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Completed"
                     } else {
                         Write-Log "[WARN] Python installer exited with code $($proc.ExitCode). Check log: $pythonLog" "WARN"
                         $results["python"] = "WARN"
-                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Failed"
                     }
                 } catch {
                     Write-Log "[ERROR] Python installation failed: $_`n$($_.ScriptStackTrace)" "ERROR"
                     $results["python"] = "ERROR"
-                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Failed"
                 }
                 Refresh-Path
             } else {
                 Write-Log "[WARN] Python installer not found at $pythonInstaller. Cannot install CrewAI." "WARN"
                 $results["python"] = "ERROR"
-                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Failed"
             }
         } else {
             Write-Log "[OK] Python already installed." "INFO"
             $results["python"] = "OK"
-            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Completed"
         }
+        if ($results["python"] -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "python" -ToolName "Python" -ExpectedPaths @("C:\Program Files\Python312\python.exe", "C:\Python312\python.exe", "C:\Users\WDAGUtility\AppData\Local\Programs\Python\Python312\python.exe") -ExpectedCommands @("python", "pip")
+            if ($verifyRes -ne "OK") { $results["python"] = $verifyRes }
+        }
+        $status = if ($results["python"] -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status $status
     } else {
         $results["python"] = "SKIP"
     }
@@ -289,7 +352,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.chrome.fileName)"
         $res = Install-SilentProcess -ToolId "chrome" -ToolName "Google Chrome" -InstallerPath $installer -SilentArgs $tools.chrome.silentArgs
         $results["chrome"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "chrome" -ToolName "Google Chrome" -ExpectedPaths @("C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe")
+            if ($verifyRes -ne "OK") { $results["chrome"] = $verifyRes }
+        }
+        $status = if ($results["chrome"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Google Chrome" -Status $status
     } else {
         Write-Log "[SKIP] Google Chrome (disabled by config)" "INFO"
@@ -352,7 +419,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.brave.fileName)"
         $res = Install-SilentProcess -ToolId "brave" -ToolName "Brave Browser" -InstallerPath $installer -SilentArgs $tools.brave.silentArgs
         $results["brave"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "brave" -ToolName "Brave Browser" -ExpectedPaths @("C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe")
+            if ($verifyRes -ne "OK") { $results["brave"] = $verifyRes }
+        }
+        $status = if ($results["brave"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Brave Browser" -Status $status
     } else {
         Write-Log "[SKIP] Brave Browser (disabled by config)" "INFO"
@@ -374,7 +445,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.notepadpp.fileName)"
         $res = Install-SilentProcess -ToolId "notepadpp" -ToolName "Notepad++" -InstallerPath $installer -SilentArgs $tools.notepadpp.silentArgs
         $results["notepadpp"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "notepadpp" -ToolName "Notepad++" -ExpectedPaths @("C:\Program Files\Notepad++\notepad++.exe", "C:\Program Files (x86)\Notepad++\notepad++.exe")
+            if ($verifyRes -ne "OK") { $results["notepadpp"] = $verifyRes }
+        }
+        $status = if ($results["notepadpp"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Notepad++" -Status $status
     } else {
         Write-Log "[SKIP] Notepad++ (disabled by config)" "INFO"
@@ -396,7 +471,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.beyondcompare.fileName)"
         $res = Install-SilentProcess -ToolId "beyondcompare" -ToolName "Beyond Compare 4" -InstallerPath $installer -SilentArgs $tools.beyondcompare.silentArgs
         $results["beyondcompare"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "beyondcompare" -ToolName "Beyond Compare 4" -ExpectedPaths @("C:\Program Files\Beyond Compare 4\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 4\BCompare.exe")
+            if ($verifyRes -ne "OK") { $results["beyondcompare"] = $verifyRes }
+        }
+        $status = if ($results["beyondcompare"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 4" -Status $status
     } else {
         Write-Log "[SKIP] Beyond Compare 4 (disabled by config)" "INFO"
@@ -456,6 +535,16 @@ try {
             }
         }
         $results["ollama"] = $res
+
+        if ($res -eq "OK") {
+            # Verify Ollama installation artifacts
+            $verifyRes = Test-InstallationArtifacts -ToolId "ollama" -ToolName "Ollama" -ExpectedPaths @("C:\Users\WDAGUtility\AppData\Local\Programs\Ollama\ollama.exe", "C:\Users\WDAGUtility\AppData\Local\Programs\Ollama\ollama app.exe", "C:\Program Files\Ollama\ollama.exe") -ExpectedCommands @("ollama")
+            if ($verifyRes -ne "OK") {
+                Write-Log "Ollama installation reports OK but artifacts missing. Downgrading result." "WARN"
+                $results["ollama"] = $verifyRes
+                $res = $verifyRes
+            }
+        }
 
         if ($res -eq "OK") {
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Completed"
@@ -572,7 +661,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.lmstudio.fileName)"
         $res = Install-SilentProcess -ToolId "lmstudio" -ToolName "LM Studio" -InstallerPath $installer -SilentArgs $tools.lmstudio.silentArgs
         $results["lmstudio"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "lmstudio" -ToolName "LM Studio" -ExpectedPaths @("C:\Users\WDAGUtility\AppData\Local\Programs\LM Studio\LM Studio.exe", "C:\Program Files\LM Studio\LM Studio.exe") -ExpectedCommands @("lms")
+            if ($verifyRes -ne "OK") { $results["lmstudio"] = $verifyRes }
+        }
+        $status = if ($results["lmstudio"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "LM Studio" -Status $status
     } else {
         Write-Log "[SKIP] LM Studio (disabled by config)" "INFO"
@@ -612,6 +705,10 @@ try {
             Write-Log "[WARN] OpenCode Terminal skipped: Node.js not available" "WARN"
             $results["opencode-terminal"] = "SKIP"
         }
+        if ($results["opencode-terminal"] -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "opencode-terminal" -ToolName "OpenCode Terminal" -ExpectedCommands @("opencode")
+            if ($verifyRes -ne "OK") { $results["opencode-terminal"] = $verifyRes }
+        }
         $status = if ($results["opencode-terminal"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status $status
     } else {
@@ -634,7 +731,11 @@ try {
         $installer = "C:\SharedTools\Installers\$($tools.'opencode-desktop'.fileName)"
         $res = Install-SilentProcess -ToolId "opencode-desktop" -ToolName "OpenCode Desktop" -InstallerPath $installer -SilentArgs $tools.'opencode-desktop'.silentArgs
         $results["opencode-desktop"] = $res
-        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        if ($res -eq "OK") {
+            $verifyRes = Test-InstallationArtifacts -ToolId "opencode-desktop" -ToolName "OpenCode Desktop" -ExpectedPaths @("C:\Users\WDAGUtility\AppData\Local\Programs\opencode\OpenCode Desktop.exe", "C:\Program Files\opencode\OpenCode Desktop.exe", "C:\Program Files (x86)\opencode\OpenCode Desktop.exe")
+            if ($verifyRes -ne "OK") { $results["opencode-desktop"] = $verifyRes }
+        }
+        $status = if ($results["opencode-desktop"] -eq "OK") { "Completed" } else { "Failed" }
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status $status
     } else {
         Write-Log "[SKIP] OpenCode Desktop (disabled by config)" "INFO"
@@ -1000,14 +1101,90 @@ try {
     }
 }
 
-# 3. Print Summary
+# 3. Final Verification Pass - Check all critical tools are actually present
+Write-Log "=== Final Verification Pass ===" "INFO"
+$criticalTools = @{
+    "Ollama" = @("C:\Users\WDAGUtility\AppData\Local\Programs\Ollama\ollama.exe", "C:\Program Files\Ollama\ollama.exe")
+    "LM Studio" = @("C:\Users\WDAGUtility\AppData\Local\Programs\LM Studio\LM Studio.exe", "C:\Program Files\LM Studio\LM Studio.exe")
+    "Google Chrome" = @("C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe")
+    "Node.js" = @("C:\Program Files\nodejs\node.exe", "C:\Program Files (x86)\nodejs\node.exe")
+    "Python" = @("C:\Program Files\Python312\python.exe", "C:\Python312\python.exe", "C:\Users\WDAGUtility\AppData\Local\Programs\Python\Python312\python.exe")
+    "Visual Studio Code" = @("C:\Users\WDAGUtility\AppData\Local\Programs\Microsoft VS Code\Code.exe", "C:\Program Files\Microsoft VS Code\Code.exe")
+    "7-Zip" = @("C:\Program Files\7-Zip\7zFM.exe", "C:\Program Files (x86)\7-Zip\7zFM.exe")
+    "Notepad++" = @("C:\Program Files\Notepad++\notepad++.exe", "C:\Program Files (x86)\Notepad++\notepad++.exe")
+    "Brave Browser" = @("C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe")
+    "Beyond Compare 4" = @("C:\Program Files\Beyond Compare 4\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 4\BCompare.exe")
+}
+
+$finalVerify = @{}
+foreach ($toolName in $criticalTools.Keys) {
+    $paths = $criticalTools[$toolName]
+    $found = $false
+    foreach ($p in $paths) {
+        if (Test-Path $p) {
+            $found = $true
+            Write-Log "  [OK] $toolName - present at: $p" "INFO"
+            break
+        }
+    }
+    if (-not $found) {
+        Write-Log "  [WARN] $toolName - NOT found at expected paths" "WARN"
+    }
+    $finalVerify[$toolName] = $found
+}
+
+# Check critical PATH commands
+$criticalCommands = @("ollama", "node", "npm", "python", "pip", "code", "git")
+foreach ($cmd in $criticalCommands) {
+    $cmdPath = Get-Command $cmd -ErrorAction SilentlyContinue
+    if ($cmdPath) {
+        Write-Log "  [OK] Command '$cmd' available at: $($cmdPath.Source)" "INFO"
+    } else {
+        Write-Log "  [WARN] Command '$cmd' NOT in PATH" "WARN"
+    }
+}
+
+# Write verification report
+$verifyReportPath = Join-Path $logsDir "final-verification.txt"
+try {
+    $report = "Final Verification Report - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n"
+    $report += "=" * 60 + "`n`n"
+    foreach ($toolName in $finalVerify.Keys) {
+        $status = if ($finalVerify[$toolName]) { "PRESENT" } else { "MISSING" }
+        $report += "$toolName : $status`n"
+    }
+    $report += "`n" + ("=" * 60) + "`n"
+    $report += "Tool Install Results:`n"
+    foreach ($key in $results.Keys) {
+        $report += "$key : $($results[$key])`n"
+    }
+    $report | Out-File -FilePath $verifyReportPath -Encoding utf8 -Force
+    Write-Log "Final verification report saved to: $verifyReportPath" "INFO"
+} catch {
+    Write-Log "Failed to write verification report: $_" "WARN"
+}
+
+# 4. Print Summary
 $endTime = Get-Date
 $duration = $endTime - $startTime
 
 try {
     Write-Log "=== Provisioning Summary ===" "INFO"
-    $results.Keys | ForEach-Object {
-        Write-Log "$_ : $($results[$_])" "INFO"
+    $okCount = ($results.Values | Where-Object { $_ -eq "OK" }).Count
+    $warnCount = ($results.Values | Where-Object { $_ -eq "WARN" }).Count
+    $errorCount = ($results.Values | Where-Object { $_ -eq "ERROR" }).Count
+    $skipCount = ($results.Values | Where-Object { $_ -eq "SKIP" }).Count
+    $total = $results.Count
+    Write-Log "Total: $total | OK: $okCount | WARN: $warnCount | ERROR: $errorCount | SKIP: $skipCount" "INFO"
+    $results.Keys | Sort-Object | ForEach-Object {
+        $marker = switch ($results[$_]) {
+            "OK" { "[OK]   " }
+            "WARN" { "[WARN] " }
+            "ERROR" { "[FAIL] " }
+            "SKIP" { "[SKIP] " }
+            default { "[----] " }
+        }
+        Write-Log "$marker$_ : $($results[$_])" "INFO"
     }
     Write-Log "Total installation time: $($duration.TotalMinutes.ToString('F2')) minutes" "INFO"
     Write-Log "=== Provisioning Finished ===" "INFO"
@@ -1015,10 +1192,12 @@ try {
     Write-Host "Error printing summary: $_"
 }
 
-# 4. Completion Toast / Dialog
+# 5. Completion Toast / Dialog
 try {
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete! Check C:\ProgramData\WindowsAISandboxApps\Logs\sandbox-bootstrap.log for details.", "AI Sandbox Generator", 0, 64)
+    $okCount = ($results.Values | Where-Object { $_ -eq "OK" }).Count
+    $total = $results.Count
+    [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete!`n`nInstalled: $okCount / $total tools`n`nCheck C:\ProgramData\WindowsAISandboxApps\Logs\sandbox-bootstrap.log for details.`nFinal verification report: $verifyReportPath", "AI Sandbox Generator", 0, 64)
 } catch {
     # Fallback to outputting in console
     Write-Log "Sandbox ready." "INFO"

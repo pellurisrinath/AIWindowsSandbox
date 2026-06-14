@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026.06.14.18.30] — 2026-06-14
+
+### Added
+- **`Test-InstallationArtifacts` function** in `sandbox-bootstrap.ps1` — verifies post-install by checking for expected file paths and PATH commands
+- **Per-tool post-install verification** for Node.js, Python, Chrome, Brave, Notepad++, Beyond Compare, Ollama, LM Studio, OpenCode Terminal, OpenCode Desktop
+- **Final Verification Pass** at end of script — checks all critical tools and writes a `final-verification.txt` report to `C:\ProgramData\WindowsAISandboxApps\Logs\`
+- **Verification of PATH commands** — checks `ollama`, `node`, `npm`, `python`, `pip`, `code`, `git` are accessible
+- **Improved summary** — shows OK/WARN/ERROR/SKIP counts with status markers in log
+
+---
+
 ## [2026.06.14.18.09] — 2026-06-14
 
 ### Fixed
