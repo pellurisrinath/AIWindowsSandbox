@@ -601,11 +601,22 @@ function Invoke-SandboxLaunch {
                 }
             }
             elseif ($tool.downloadType -eq "github") {
-                if (-not (Test-Path $stagingFile)) {
-                    $resolvedUrl = Get-GitHubReleaseAssetUrl -ApiUrl $tool.url -RegexPattern $tool.assetRegex
-                    if (-not $resolvedUrl -and $tool.fallbackUrl) {
-                        Write-Log "GitHub API resolution failed for $($tool.name). Falling back to direct URL: $($tool.fallbackUrl)" "WARN"
-                        $resolvedUrl = $tool.fallbackUrl
+                if (-not (Test-InstallerAlreadyCached -FilePath $stagingFile -ExpectedHash $tool.hash)) {
+                    if (Test-Path $stagingFile) {
+                        Write-Log "Cached file is invalid or corrupted. Re-downloading: $($tool.name)" "WARN"
+                        Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                    }
+                    $resolvedUrl = $null
+                    try {
+                        $resolvedUrl = Get-GitHubReleaseAssetUrl -ApiUrl $tool.url -RegexPattern $tool.assetRegex
+                    } catch {}
+                    if ([string]::IsNullOrWhiteSpace($resolvedUrl)) {
+                        if ($tool.fallbackUrl) {
+                            Write-Log "GitHub API resolution failed for $($tool.name). Falling back to direct URL: $($tool.fallbackUrl)" "WARN"
+                            $resolvedUrl = $tool.fallbackUrl
+                        } else {
+                            Write-Log "GitHub API resolution failed for $($tool.name) and no fallback URL is available." "ERROR"
+                        }
                     }
                     if ($resolvedUrl) {
                         Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile

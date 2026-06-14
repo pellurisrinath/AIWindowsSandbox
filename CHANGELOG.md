@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026.06.14.20.00] — 2026-06-14
+
+### Fixed
+- **Python MSI URL**: Updated to 3.12.7 (3.12.4 returned 404); added 3.11.10 fallback
+- **Beyond Compare 4 URL**: Replaced broken `scootersoftware.com/files/...` URL with `scootersoftware.com/download/bcompare-4-stable` and added 4.4.7 fallback
+- **LM Studio URL**: Removed broken GitHub API URL; using direct `lmstudio.ai/install/windows/latest/x64` and fallback to `lmstudio.ai/LM-Studio-Setup.exe`
+- **GitHub download fallback bug**: When GitHub API fails (rate limit) AND fallback URL exists, the URL was sometimes not being used. Fixed `if (-not $resolvedUrl)` to use `[string]::IsNullOrWhiteSpace()` to properly catch empty strings
+- **7-Zip & PowerToys**: Now properly download from fallback URL when GitHub API rate-limited (uses Test-InstallerAlreadyCached check)
+
+### Changed
+- All github downloads now use `Test-InstallerAlreadyCached` for cache validation (like direct downloads)
+
+---
+
 ## [2026.06.14.18.30] — 2026-06-14
 
 ### Added
