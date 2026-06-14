@@ -6,7 +6,8 @@ param(
     [switch]$GUI,
     [switch]$SkipOllama,
     [switch]$SkipLMStudio,
-    [switch]$SkipOpenCode,
+    [switch]$SkipOpenCodeTerminal,
+    [switch]$SkipOpenCodeDesktop,
     [switch]$SkipChrome,
     [switch]$SkipBrave,
     [switch]$SkipNotepadPP,
@@ -16,6 +17,15 @@ param(
     [switch]$SkipCrewAI,
     [switch]$SkipCopilot,
     [switch]$SkipPageAssist,
+    [switch]$SkipVSCode,
+    [switch]$SkipVSCommunity,
+    [switch]$Skip7Zip,
+    [switch]$SkipSysinternals,
+    [switch]$SkipPowerToys,
+    [switch]$SkipWindowsSDK,
+    [switch]$SkipADK,
+    [switch]$SkipADKWinPE,
+    [switch]$SkipAntigravity,
     [int]$SandboxMemoryMB = 16384,
     [switch]$PreCacheOnly,
     [switch]$CleanCache,
@@ -897,7 +907,7 @@ if ($GUI) {
 
     $Form = New-Object System.Windows.Forms.Form
     $Form.Text = "Windows AI Sandbox Launcher"
-    $Form.Size = New-Object System.Drawing.Size(760, 620)
+    $Form.Size = New-Object System.Drawing.Size(760, 780)
     $Form.StartPosition = "CenterScreen"
     $Form.FormBorderStyle = "FixedDialog"
     $Form.MaximizeBox = $false
@@ -910,7 +920,7 @@ if ($GUI) {
     $toolsGroupBox = New-Object System.Windows.Forms.GroupBox
     $toolsGroupBox.Text = "Select Tools to Install"
     $toolsGroupBox.Location = New-Object System.Drawing.Point(20, 10)
-    $toolsGroupBox.Size = New-Object System.Drawing.Size(700, 200)
+    $toolsGroupBox.Size = New-Object System.Drawing.Size(700, 360)
     $Form.Controls.Add($toolsGroupBox)
 
     $checkboxes = @{}
@@ -951,7 +961,7 @@ if ($GUI) {
     # GroupBox for Settings
     $settingsGroupBox = New-Object System.Windows.Forms.GroupBox
     $settingsGroupBox.Text = "Sandbox Settings"
-    $settingsGroupBox.Location = New-Object System.Drawing.Point(20, 220)
+    $settingsGroupBox.Location = New-Object System.Drawing.Point(20, 380)
     $settingsGroupBox.Size = New-Object System.Drawing.Size(700, 60)
     $Form.Controls.Add($settingsGroupBox)
 
@@ -973,13 +983,13 @@ if ($GUI) {
     # Launch Button
     $launchButton = New-Object System.Windows.Forms.Button
     $launchButton.Text = "Launch Sandbox"
-    $launchButton.Location = New-Object System.Drawing.Point(20, 295)
+    $launchButton.Location = New-Object System.Drawing.Point(20, 455)
     $launchButton.Size = New-Object System.Drawing.Size(150, 35)
     $Form.Controls.Add($launchButton)
 
     # Progress Bar
     $progressBar = New-Object System.Windows.Forms.ProgressBar
-    $progressBar.Location = New-Object System.Drawing.Point(190, 300)
+    $progressBar.Location = New-Object System.Drawing.Point(190, 460)
     $progressBar.Size = New-Object System.Drawing.Size(530, 25)
     $progressBar.Minimum = 0
     $progressBar.Maximum = 100
@@ -989,14 +999,14 @@ if ($GUI) {
     # Status/Checklist Label
     $statusLabel = New-Object System.Windows.Forms.Label
     $statusLabel.Text = "Ready"
-    $statusLabel.Location = New-Object System.Drawing.Point(190, 330)
+    $statusLabel.Location = New-Object System.Drawing.Point(190, 490)
     $statusLabel.Size = New-Object System.Drawing.Size(530, 20)
     $Form.Controls.Add($statusLabel)
 
     # Checklist GroupBox
     $checklistGroupBox = New-Object System.Windows.Forms.GroupBox
     $checklistGroupBox.Text = "Bootstrap Status Checklist"
-    $checklistGroupBox.Location = New-Object System.Drawing.Point(20, 350)
+    $checklistGroupBox.Location = New-Object System.Drawing.Point(20, 520)
     $checklistGroupBox.Size = New-Object System.Drawing.Size(340, 210)
     $Form.Controls.Add($checklistGroupBox)
 
@@ -1009,7 +1019,7 @@ if ($GUI) {
     # Logs GroupBox
     $logsGroupBox = New-Object System.Windows.Forms.GroupBox
     $logsGroupBox.Text = "Real-time Installation Logs"
-    $logsGroupBox.Location = New-Object System.Drawing.Point(380, 350)
+    $logsGroupBox.Location = New-Object System.Drawing.Point(380, 520)
     $logsGroupBox.Size = New-Object System.Drawing.Size(340, 210)
     $Form.Controls.Add($logsGroupBox)
 
@@ -1081,8 +1091,18 @@ if ($GUI) {
         $chkBc = $checkboxes["beyondcompare"].Checked
         $chkOllama = $checkboxes["ollama"].Checked
         $chkLm = $checkboxes["lmstudio"].Checked
-        $chkOpenCode = $checkboxes["opencode"].Checked
+        $chkOpenCodeTerminal = $checkboxes["opencode-terminal"].Checked
+        $chkOpenCodeDesktop = $checkboxes["opencode-desktop"].Checked
         $chkCopilot = $checkboxes["copilot"].Checked
+        $chkVSCode = $checkboxes["vscode"].Checked
+        $chkVSCommunity = $checkboxes["vscommunity"].Checked
+        $chk7Zip = $checkboxes["7zip"].Checked
+        $chkSysinternals = $checkboxes["sysinternals"].Checked
+        $chkPowerToys = $checkboxes["powertoys"].Checked
+        $chkWindowsSDK = $checkboxes["windowssdk"].Checked
+        $chkADK = $checkboxes["adk"].Checked
+        $chkADKWinPE = $checkboxes["adkwinpe"].Checked
+        $chkAntigravity = $checkboxes["antigravity"].Checked
 
         if ($chkNpm) { [void]$enabledStepsList.Add("Node.js + npm") }
         if ($chkPython) { [void]$enabledStepsList.Add("Python") }
@@ -1093,14 +1113,23 @@ if ($GUI) {
         if ($chkBc) { [void]$enabledStepsList.Add("Beyond Compare 4") }
         if ($chkOllama) { 
             [void]$enabledStepsList.Add("Ollama")
+            [void]$enabledStepsList.Add("Gemma4 Model")
             [void]$enabledStepsList.Add("nous-hermes2 Model")
         }
         if ($chkLm) { [void]$enabledStepsList.Add("LM Studio") }
-        if ($chkOpenCode) { [void]$enabledStepsList.Add("OpenCode") }
+        if ($chkOpenCodeTerminal) { [void]$enabledStepsList.Add("OpenCode Terminal") }
+        if ($chkOpenCodeDesktop) { [void]$enabledStepsList.Add("OpenCode Desktop") }
         if ($chkCrew) { [void]$enabledStepsList.Add("Crew AI") }
         if ($chkCopilot -and $chkChrome) { [void]$enabledStepsList.Add("Microsoft Copilot PWA") }
-        [void]$enabledStepsList.Add("Antigravity 2.0 Check")
-        [void]$enabledStepsList.Add("Hermes Agent CLI Check")
+        if ($chkVSCode) { [void]$enabledStepsList.Add("Visual Studio Code") }
+        if ($chkVSCommunity) { [void]$enabledStepsList.Add("Visual Studio Community") }
+        if ($chk7Zip) { [void]$enabledStepsList.Add("7-Zip") }
+        if ($chkSysinternals) { [void]$enabledStepsList.Add("Sysinternals Suite") }
+        if ($chkPowerToys) { [void]$enabledStepsList.Add("Windows PowerToys") }
+        if ($chkWindowsSDK) { [void]$enabledStepsList.Add("Windows SDK") }
+        if ($chkADK) { [void]$enabledStepsList.Add("Windows ADK") }
+        if ($chkADKWinPE) { [void]$enabledStepsList.Add("Windows ADK WinPE Add-on") }
+        if ($chkAntigravity) { [void]$enabledStepsList.Add("Antigravity CLI") }
 
         foreach ($stepName in $enabledStepsList) {
             $checkedListBox.Items.Add($stepName, $false)

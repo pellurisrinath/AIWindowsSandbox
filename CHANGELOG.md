@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026.06.14.16.40] — 2026-06-14
+
+### Fixed
+- GUI form size increased to accommodate all 22 tools (760x780)
+- Tools GroupBox height increased to 360px to show all tool checkboxes
+- Moved Settings, Launch button, Progress bar, Checklist, and Logs sections down to fit
+
+### Changed
+- Updated param block with new skip flags: `-SkipOpenCodeTerminal`, `-SkipOpenCodeDesktop`, `-SkipVSCode`, `-SkipVSCommunity`, `-Skip7Zip`, `-SkipSysinternals`, `-SkipPowerToys`, `-SkipWindowsSDK`, `-SkipADK`, `-SkipADKWinPE`, `-SkipAntigravity`
+- Updated launch button click handler to handle all new tools dynamically from tools.json
+- Checklist now includes all selected tools with correct display names
+
+---
+
 ## [2026.06.14.16.28] — 2026-06-14
 
 ### Added
