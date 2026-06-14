@@ -93,8 +93,8 @@
       "skipFlag": "SkipLMStudio",
       "order": 8
     },
-    "opencode": {
-      "name": "OpenCode",
+    "opencode-terminal": {
+      "name": "OpenCode Terminal",
       "enabled": true,
       "downloadType": "direct",
       "url": "https://opencode.ai/download",
@@ -104,6 +104,16 @@
       "skipFlag": "SkipOpenCode",
       "order": 9
     },
+    "opencode-desktop": {
+      "name": "OpenCode Desktop",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://opencode.ai/download",
+      "fileName": "OpenCode Desktop Installer.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipOpenCodeDesktop",
+      "order": 10
+    },
     "crewai": {
       "name": "Crew AI",
       "enabled": true,
@@ -112,7 +122,7 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCrewAI",
-      "order": 10
+      "order": 11
     },
     "copilot": {
       "name": "Microsoft Copilot PWA",
@@ -122,7 +132,17 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCopilot",
-      "order": 11
+      "order": 12
+    },
+    "antigravity": {
+      "name": "Antigravity CLI",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://antigravity.google/product/antigravity-cli",
+      "fileName": "antigravity-cli.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipAntigravity",
+      "order": 13
     }
   }
 }

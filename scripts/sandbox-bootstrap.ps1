@@ -63,6 +63,107 @@ function Write-Log {
 
 Write-Log "=== Windows AI Sandbox Provisioning Started ===" "INFO"
 
+# Show a progress window to the user
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    
+    $progressForm = New-Object System.Windows.Forms.Form
+    $progressForm.Text = "Windows AI Sandbox - Installing Tools"
+    $progressForm.Size = New-Object System.Drawing.Size(500, 350)
+    $progressForm.StartPosition = "CenterScreen"
+    $progressForm.FormBorderStyle = "FixedDialog"
+    $progressForm.MaximizeBox = $false
+    $progressForm.MinimizeBox = $false
+    $progressForm.TopMost = $true
+    
+    $titleLabel = New-Object System.Windows.Forms.Label
+    $titleLabel.Text = "Installing AI Sandbox Tools..."
+    $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+    $titleLabel.Location = New-Object System.Drawing.Point(20, 20)
+    $titleLabel.Size = New-Object System.Drawing.Size(460, 30)
+    $progressForm.Controls.Add($titleLabel)
+    
+    $statusLabel = New-Object System.Windows.Forms.Label
+    $statusLabel.Text = "Initializing..."
+    $statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $statusLabel.Location = New-Object System.Drawing.Point(20, 60)
+    $statusLabel.Size = New-Object System.Drawing.Size(460, 25)
+    $progressForm.Controls.Add($statusLabel)
+    
+    $detailLabel = New-Object System.Windows.Forms.Label
+    $detailLabel.Text = "Please wait while tools are being installed."
+    $detailLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $detailLabel.ForeColor = [System.Drawing.Color]::Gray
+    $detailLabel.Location = New-Object System.Drawing.Point(20, 90)
+    $detailLabel.Size = New-Object System.Drawing.Size(460, 20)
+    $progressForm.Controls.Add($detailLabel)
+    
+    $progressBar = New-Object System.Windows.Forms.ProgressBar
+    $progressBar.Location = New-Object System.Drawing.Point(20, 120)
+    $progressBar.Size = New-Object System.Drawing.Size(460, 30)
+    $progressBar.Minimum = 0
+    $progressBar.Maximum = 100
+    $progressBar.Value = 0
+    $progressBar.Style = "Continuous"
+    $progressForm.Controls.Add($progressBar)
+    
+    $logBox = New-Object System.Windows.Forms.TextBox
+    $logBox.Multiline = $true
+    $logBox.ReadOnly = $true
+    $logBox.ScrollBars = "Vertical"
+    $logBox.Font = New-Object System.Drawing.Font("Consolas", 8)
+    $logBox.Location = New-Object System.Drawing.Point(20, 160)
+    $logBox.Size = New-Object System.Drawing.Size(460, 140)
+    $progressForm.Controls.Add($logBox)
+    
+    $global:ProgressForm = $progressForm
+    $global:ProgressStatusLabel = $statusLabel
+    $global:ProgressDetailLabel = $detailLabel
+    $global:ProgressBar = $progressBar
+    $global:ProgressLogBox = $logBox
+    
+    # Show form in a separate thread so it doesn't block script execution
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.ApartmentState = "STA"
+    $runspace.ThreadOptions = "ReuseThread"
+    $runspace.Open()
+    
+    $ps = [powershell]::Create()
+    $ps.Runspace = $runspace
+    $ps.AddScript({
+        param($form)
+        $form.Add_Shown({$form.Activate()})
+        [void]$form.ShowDialog()
+    }).AddArgument($progressForm) | Out-Null
+    
+    $global:ProgressHandle = $ps.BeginInvoke()
+    
+    # Give the form a moment to render
+    Start-Sleep -Milliseconds 500
+} catch {
+    Write-Log "Failed to create progress window: $_" "WARN"
+    $global:ProgressForm = $null
+}
+
+function Update-ProgressUI {
+    param(
+        [string]$Status,
+        [string]$Detail,
+        [int]$Percent
+    )
+    try {
+        if ($global:ProgressForm -and -not $global:ProgressForm.IsDisposed) {
+            $global:ProgressStatusLabel.Text = $Status
+            $global:ProgressDetailLabel.Text = $Detail
+            $global:ProgressBar.Value = [Math]::Min(100, [Math]::Max(0, $Percent))
+            $global:ProgressLogBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')] $Status`r`n")
+            $global:ProgressForm.Refresh()
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+    } catch {}
+}
+
 # 1. Read configuration
 try {
     $configPath = "C:\SharedTools\install-config.json"
@@ -83,14 +184,15 @@ try {
     if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 4") }
     if ($tools.ollama.enabled) { 
         [void]$enabledSteps.Add("Ollama")
+        [void]$enabledSteps.Add("Gemma4 Model")
         [void]$enabledSteps.Add("nous-hermes2 Model")
     }
     if ($tools.lmstudio.enabled) { [void]$enabledSteps.Add("LM Studio") }
-    if ($tools.opencode.enabled) { [void]$enabledSteps.Add("OpenCode") }
+    if ($tools.'opencode-terminal'.enabled) { [void]$enabledSteps.Add("OpenCode Terminal") }
+    if ($tools.'opencode-desktop'.enabled) { [void]$enabledSteps.Add("OpenCode Desktop") }
     if ($tools.crewai.enabled) { [void]$enabledSteps.Add("Crew AI") }
     if ($tools.copilot.enabled -and $tools.chrome.enabled) { [void]$enabledSteps.Add("Microsoft Copilot PWA") }
-    [void]$enabledSteps.Add("Antigravity 2.0 Check")
-    [void]$enabledSteps.Add("Hermes Agent CLI Check")
+    if ($tools.antigravity.enabled) { [void]$enabledSteps.Add("Antigravity CLI") }
 
     $global:totalSteps = $enabledSteps.Count
     $global:currentStep = 0
@@ -193,6 +295,7 @@ try {
     if ($tools.nodejs.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Node.js + npm" -Status "Installing"
+        Update-ProgressUI -Status "Installing Node.js + npm" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.nodejs.fileName)"
         $res = Install-SilentProcess -ToolId "nodejs" -ToolName "Node.js + npm" -InstallerPath $installer -SilentArgs $tools.nodejs.silentArgs
         $results["nodejs"] = $res
@@ -216,6 +319,7 @@ try {
     if ($tools.python.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Python" -Status "Installing"
+        Update-ProgressUI -Status "Installing Python" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         Write-Log "Checking for Python..." "INFO"
         $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
         if (-not $pythonCmd) {
@@ -265,6 +369,7 @@ try {
     if ($tools.chrome.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Google Chrome" -Status "Installing"
+        Update-ProgressUI -Status "Installing Google Chrome" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.chrome.fileName)"
         $res = Install-SilentProcess -ToolId "chrome" -ToolName "Google Chrome" -InstallerPath $installer -SilentArgs $tools.chrome.silentArgs
         $results["chrome"] = $res
@@ -287,6 +392,7 @@ try {
     if ($tools.pageassist.enabled -and $results["chrome"] -eq "OK") {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Page Assist Extension" -Status "Installing"
+        Update-ProgressUI -Status "Installing Page Assist Extension" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         Write-Log "Configuring Page Assist Chrome extension..." "INFO"
         try {
             $targetExtPath = "C:\SharedTools\Extensions\page-assist"
@@ -328,6 +434,7 @@ try {
     if ($tools.brave.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Brave Browser" -Status "Installing"
+        Update-ProgressUI -Status "Installing Brave Browser" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.brave.fileName)"
         $res = Install-SilentProcess -ToolId "brave" -ToolName "Brave Browser" -InstallerPath $installer -SilentArgs $tools.brave.silentArgs
         $results["brave"] = $res
@@ -350,6 +457,7 @@ try {
     if ($tools.notepadpp.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Notepad++" -Status "Installing"
+        Update-ProgressUI -Status "Installing Notepad++" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.notepadpp.fileName)"
         $res = Install-SilentProcess -ToolId "notepadpp" -ToolName "Notepad++" -InstallerPath $installer -SilentArgs $tools.notepadpp.silentArgs
         $results["notepadpp"] = $res
@@ -372,6 +480,7 @@ try {
     if ($tools.beyondcompare.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 4" -Status "Installing"
+        Update-ProgressUI -Status "Installing Beyond Compare 4" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.beyondcompare.fileName)"
         $res = Install-SilentProcess -ToolId "beyondcompare" -ToolName "Beyond Compare 4" -InstallerPath $installer -SilentArgs $tools.beyondcompare.silentArgs
         $results["beyondcompare"] = $res
@@ -394,6 +503,7 @@ try {
     if ($tools.ollama.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Installing"
+        Update-ProgressUI -Status "Installing Ollama" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.ollama.fileName)"
         $res = Install-SilentProcess -ToolId "ollama" -ToolName "Ollama" -InstallerPath $installer -SilentArgs $tools.ollama.silentArgs
         $results["ollama"] = $res
@@ -401,9 +511,7 @@ try {
         if ($res -eq "OK") {
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Completed"
             
-            # Substep: nous-hermes2 Model
-            $global:currentStep++
-            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Installing"
+            # Substep: Start Ollama and wait for API
             Write-Log "Starting Ollama application..." "INFO"
             $ollamaAppPath = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama app.exe"
             if (Test-Path $ollamaAppPath) {
@@ -421,8 +529,34 @@ try {
                         # Poll again
                     }
                 }
+                
                 if ($started) {
-                    # Pull nous-hermes2 model
+                    # Substep: Gemma4 Model (first priority)
+                    $global:currentStep++
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Installing"
+                    Update-ProgressUI -Status "Pulling Gemma4 model" -Detail "Downloading ~5GB, this may take a while..." -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
+                    Write-Log "Pulling Gemma4 model..." "INFO"
+                    try {
+                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull gemma4" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        if ($proc.ExitCode -eq 0) {
+                            Write-Log "[OK] Gemma4 model pulled successfully." "INFO"
+                            $results["gemma4_model"] = "OK"
+                            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Completed"
+                        } else {
+                            Write-Log "[WARN] ollama pull gemma4 exited with code $($proc.ExitCode)" "WARN"
+                            $results["gemma4_model"] = "WARN"
+                            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                        }
+                    } catch {
+                        Write-Log "[ERROR] Failed to pull Gemma4 model: $_`n$($_.ScriptStackTrace)" "ERROR"
+                        $results["gemma4_model"] = "ERROR"
+                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                    }
+                    
+                    # Substep: nous-hermes2 Model
+                    $global:currentStep++
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Installing"
+                    Update-ProgressUI -Status "Pulling nous-hermes2 model" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
                     Write-Log "Pulling nous-hermes2 model..." "INFO"
                     try {
                         $proc = Start-Process -FilePath "ollama" -ArgumentList "pull nous-hermes2" -Wait -PassThru -NoNewWindow -ErrorAction Stop
@@ -442,30 +576,43 @@ try {
                     }
                 } else {
                     Write-Log "[WARN] Ollama app started but API is unresponsive." "WARN"
+                    $results["gemma4_model"] = "WARN"
                     $results["hermes_model"] = "WARN"
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                    $global:currentStep++
                     Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
                 }
             } else {
                 Write-Log "[WARN] Ollama executable not found at $ollamaAppPath" "WARN"
+                $results["gemma4_model"] = "ERROR"
                 $results["hermes_model"] = "ERROR"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+                $global:currentStep++
                 Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
             }
         } else {
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Failed"
             $global:currentStep++
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+            $global:currentStep++
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
+            $results["gemma4_model"] = "ERROR"
             $results["hermes_model"] = "ERROR"
         }
     } else {
         Write-Log "[SKIP] Ollama (disabled by config)" "INFO"
         $results["ollama"] = "SKIP"
+        $results["gemma4_model"] = "SKIP"
         $results["hermes_model"] = "SKIP"
     }
 } catch {
     Write-Log "Ollama installation/configuration block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
     $results["ollama"] = "ERROR"
+    $results["gemma4_model"] = "ERROR"
     $results["hermes_model"] = "ERROR"
     if ($tools.ollama.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Failed"
+        $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Failed"
     }
 }
@@ -475,6 +622,7 @@ try {
     if ($tools.lmstudio.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "LM Studio" -Status "Installing"
+        Update-ProgressUI -Status "Installing LM Studio" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         $installer = "C:\SharedTools\Installers\$($tools.lmstudio.fileName)"
         $res = Install-SilentProcess -ToolId "lmstudio" -ToolName "LM Studio" -InstallerPath $installer -SilentArgs $tools.lmstudio.silentArgs
         $results["lmstudio"] = $res
@@ -492,33 +640,58 @@ try {
     }
 }
 
-# Order 10: OpenCode
+# Order 10: OpenCode Terminal
 try {
-    if ($tools.opencode.enabled) {
+    if ($tools.'opencode-terminal'.enabled) {
         $global:currentStep++
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.opencode.fileName)"
-        $res = Install-SilentProcess -ToolId "opencode" -ToolName "OpenCode" -InstallerPath $installer -SilentArgs $tools.opencode.silentArgs
-        $results["opencode"] = $res
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status "Installing"
+        Update-ProgressUI -Status "Installing OpenCode Terminal" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
+        $installer = "C:\SharedTools\Installers\$($tools.'opencode-terminal'.fileName)"
+        $res = Install-SilentProcess -ToolId "opencode-terminal" -ToolName "OpenCode Terminal" -InstallerPath $installer -SilentArgs $tools.'opencode-terminal'.silentArgs
+        $results["opencode-terminal"] = $res
         $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status $status
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status $status
     } else {
-        Write-Log "[SKIP] OpenCode (disabled by config)" "INFO"
-        $results["opencode"] = "SKIP"
+        Write-Log "[SKIP] OpenCode Terminal (disabled by config)" "INFO"
+        $results["opencode-terminal"] = "SKIP"
     }
 } catch {
-    Write-Log "OpenCode installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    $results["opencode"] = "ERROR"
-    if ($tools.opencode.enabled) {
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode" -Status "Failed"
+    Write-Log "OpenCode Terminal installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["opencode-terminal"] = "ERROR"
+    if ($tools.'opencode-terminal'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Terminal" -Status "Failed"
     }
 }
 
-# Order 11: Crew AI (pip install)
+# Order 11: OpenCode Desktop
+try {
+    if ($tools.'opencode-desktop'.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status "Installing"
+        Update-ProgressUI -Status "Installing OpenCode Desktop" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
+        $installer = "C:\SharedTools\Installers\$($tools.'opencode-desktop'.fileName)"
+        $res = Install-SilentProcess -ToolId "opencode-desktop" -ToolName "OpenCode Desktop" -InstallerPath $installer -SilentArgs $tools.'opencode-desktop'.silentArgs
+        $results["opencode-desktop"] = $res
+        $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status $status
+    } else {
+        Write-Log "[SKIP] OpenCode Desktop (disabled by config)" "INFO"
+        $results["opencode-desktop"] = "SKIP"
+    }
+} catch {
+    Write-Log "OpenCode Desktop installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["opencode-desktop"] = "ERROR"
+    if ($tools.'opencode-desktop'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status "Failed"
+    }
+}
+
+# Order 12: Crew AI (pip install)
 try {
     if ($tools.crewai.enabled -and $results["python"] -eq "OK") {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Crew AI" -Status "Installing"
+        Update-ProgressUI -Status "Installing Crew AI" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         Write-Log "Installing Crew AI via pip..." "INFO"
         try {
             $proc = Start-Process -FilePath "pip" -ArgumentList "install", "crewai" -Wait -PassThru -NoNewWindow -ErrorAction Stop
@@ -548,11 +721,12 @@ try {
     }
 }
 
-# Order 12: Microsoft Copilot PWA
+# Order 13: Microsoft Copilot PWA
 try {
     if ($tools.copilot.enabled -and $results["chrome"] -eq "OK") {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Microsoft Copilot PWA" -Status "Installing"
+        Update-ProgressUI -Status "Installing Microsoft Copilot PWA" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
         Write-Log "Installing Microsoft Copilot PWA..." "INFO"
         try {
             Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "--app=https://copilot.microsoft.com --install-webapp" -Wait -NoNewWindow -ErrorAction Stop
@@ -575,38 +749,67 @@ try {
     }
 }
 
-# Placeholder Check: Antigravity 2.0 / IDE / CLI
+# Order 14: Antigravity CLI
 try {
-    $global:currentStep++
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Installing"
-    Write-Log "Running check for Antigravity 2.0 (Placeholder)..." "INFO"
-    try {
-        # Force TLS 1.2
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $response = Invoke-WebRequest -Uri "https://antigravity.google/download" -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
-        Write-Log "[OK] Antigravity 2.0 endpoint reached." "INFO"
-        $results["antigravity"] = "OK"
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Completed"
-    } catch {
-        Write-Log "[SKIP] Antigravity 2.0 - source unverified or unreachable." "INFO"
+    if ($tools.antigravity.enabled) {
+        $global:currentStep++
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Installing"
+        Update-ProgressUI -Status "Installing Antigravity CLI" -Detail "Step $global:currentStep of $global:totalSteps" -Percent ([Math]::Round(($global:currentStep / $global:totalSteps) * 100))
+        
+        # Try to download and install Antigravity CLI
+        Write-Log "Attempting to download Antigravity CLI..." "INFO"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            
+            # Check if the download URL is accessible
+            $antigravityUrl = "https://antigravity.google/product/antigravity-cli"
+            $antigravityInstaller = "C:\SharedTools\Installers\antigravity-cli.exe"
+            
+            # Try to resolve the download URL
+            try {
+                $response = Invoke-WebRequest -Uri $antigravityUrl -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+                # If the page is accessible, try to find the download link
+                if ($response.Content -match 'href="([^"]*antigravity[^"]*\.exe)"') {
+                    $downloadUrl = $Matches[1]
+                    if (-not $downloadUrl.StartsWith("http")) {
+                        $downloadUrl = "https://antigravity.google$downloadUrl"
+                    }
+                    Write-Log "Downloading Antigravity CLI from: $downloadUrl" "INFO"
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $antigravityInstaller -UseBasicParsing -ErrorAction Stop
+                    
+                    if (Test-Path $antigravityInstaller) {
+                        $res = Install-SilentProcess -ToolId "antigravity" -ToolName "Antigravity CLI" -InstallerPath $antigravityInstaller -SilentArgs "/S"
+                        $results["antigravity"] = $res
+                    } else {
+                        Write-Log "[SKIP] Antigravity CLI - download failed" "INFO"
+                        $results["antigravity"] = "SKIP"
+                    }
+                } else {
+                    Write-Log "[SKIP] Antigravity CLI - no download link found on page" "INFO"
+                    $results["antigravity"] = "SKIP"
+                }
+            } catch {
+                Write-Log "[SKIP] Antigravity CLI - source unreachable or not available: $_" "INFO"
+                $results["antigravity"] = "SKIP"
+            }
+            
+            $status = if ($results["antigravity"] -eq "OK") { "Completed" } else { "Skipped" }
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status $status
+        } catch {
+            Write-Log "[SKIP] Antigravity CLI - installation failed: $_" "INFO"
+            $results["antigravity"] = "SKIP"
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Skipped"
+        }
+    } else {
+        Write-Log "[SKIP] Antigravity CLI (disabled by config)" "INFO"
         $results["antigravity"] = "SKIP"
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Completed"
     }
 } catch {
-    Write-Log "Antigravity check failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity 2.0 Check" -Status "Failed"
-}
-
-# Placeholder Check: Hermes Agent CLI
-try {
-    $global:currentStep++
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Installing"
-    Write-Log "[INFO] Hermes Agent: no official CLI binary available; nous-hermes2 was loaded via Ollama as a substitute." "INFO"
-    $results["hermes_agent"] = "SKIP"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Completed"
-} catch {
-    Write-Log "Hermes check failed: $_`n$($_.ScriptStackTrace)" "ERROR"
-    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Hermes Agent CLI Check" -Status "Failed"
+    Write-Log "Antigravity CLI installation block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["antigravity"] = "ERROR"
+    if ($tools.antigravity.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Antigravity CLI" -Status "Failed"
+    }
 }
 
 # 3. Print Summary
@@ -626,12 +829,29 @@ try {
 
 # 4. Completion Toast / Dialog
 try {
+    Update-ProgressUI -Status "Installation Complete" -Detail "All tools have been installed successfully." -Percent 100
+    
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete! Check C:\ProgramData\AIWindowsSandbox\Logs\sandbox-bootstrap.log for details.", "AI Sandbox Generator", 0, 64)
 } catch {
     # Fallback to outputting in console
     Write-Log "Sandbox ready." "INFO"
 }
+
+# Close progress window
+try {
+    if ($global:ProgressForm -and -not $global:ProgressForm.IsDisposed) {
+        $global:ProgressForm.Close()
+        $global:ProgressForm.Dispose()
+    }
+    if ($global:ProgressHandle) {
+        $ps.EndInvoke($global:ProgressHandle)
+        $ps.Dispose()
+    }
+    if ($runspace) {
+        $runspace.Close()
+    }
+} catch {}
 
 Exit-Script 0
 

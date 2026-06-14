@@ -1,5 +1,42 @@
 # Changelog
 
+## [2026.06.14.16.17] — 2026-06-14
+
+### Added
+- **OpenCode Terminal** — First tool installed in sandbox (priority installation)
+- **OpenCode Desktop** — Desktop GUI installer (separate from terminal)
+- **Gemma4 Model** — Auto-pulled after Ollama installation (primary AI model)
+- **Antigravity CLI** — Attempted download/install from `https://antigravity.google/product/antigravity-cli`
+- **Progress Window** — Visual Windows Forms UI showing real-time installation progress with:
+  - Status label showing current tool being installed
+  - Progress bar with percentage completion
+  - Live log console showing installation events
+  - Step counter (X of Y tools)
+
+### Changed
+- Renamed "OpenCode" to "OpenCode Terminal" for clarity
+- Updated installation order to prioritize AI tools
+- Ollama now pulls both Gemma4 AND nous-hermes2 models
+- Removed placeholder "Hermes Agent CLI Check" (nous-hermes2 covers this)
+
+### Tools installed in order
+1. Node.js + npm
+2. Python
+3. Google Chrome
+4. Page Assist Extension
+5. Brave Browser
+6. Notepad++
+7. Beyond Compare 4
+8. Ollama → Gemma4 → nous-hermes2
+9. LM Studio
+10. OpenCode Terminal
+11. OpenCode Desktop
+12. Crew AI
+13. Microsoft Copilot PWA
+14. Antigravity CLI (if available)
+
+---
+
 ## [1.1.0] — 2026-06-14
 
 ### Added
