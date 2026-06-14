@@ -131,7 +131,8 @@ try {
     if ($tools.pageassist.enabled -and $tools.chrome.enabled) { [void]$enabledSteps.Add("Page Assist Extension") }
     if ($tools.brave.enabled) { [void]$enabledSteps.Add("Brave Browser") }
     if ($tools.notepadpp.enabled) { [void]$enabledSteps.Add("Notepad++") }
-    if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 4") }
+    if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 5") }
+    if ($tools.'bcompare-vscode'.enabled) { [void]$enabledSteps.Add("Beyond Compare VSCode Extension") }
     if ($tools.ollama.enabled) { 
         [void]$enabledSteps.Add("Ollama")
         [void]$enabledSteps.Add("Gemma4 Model")
@@ -908,6 +909,70 @@ try {
     }
 }
 
+# Order 13.5: Beyond Compare VSCode Extension (depends on VSCode and Beyond Compare)
+try {
+    if ($tools.'bcompare-vscode'.enabled) {
+        # Skip if prerequisites are missing
+        if ($results["vscode"] -ne "OK") {
+            Write-Log "[SKIP] Beyond Compare VSCode Extension (VSCode not installed)" "WARN"
+            $results["bcompare-vscode"] = "SKIP"
+        } elseif ($results["beyondcompare"] -ne "OK") {
+            Write-Log "[SKIP] Beyond Compare VSCode Extension (Beyond Compare not installed)" "WARN"
+            $results["bcompare-vscode"] = "SKIP"
+        } else {
+            $global:currentStep++
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare VSCode Extension" -Status "Installing"
+            $vsixPath = "C:\SharedTools\Installers\$($tools.'bcompare-vscode'.fileName)"
+            if (Test-Path $vsixPath) {
+                try {
+                    Refresh-Path
+                    $codeCmd = Get-Command code -ErrorAction SilentlyContinue
+                    if ($codeCmd) {
+                        Write-Log "Installing Beyond Compare VSCode Extension via 'code --install-extension'..." "INFO"
+                        $installProc = Start-Process -FilePath "code" -ArgumentList "--install-extension", $vsixPath, "--force" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        if ($installProc.ExitCode -eq 0) {
+                            Write-Log "[OK] Beyond Compare VSCode Extension installed successfully." "INFO"
+                            $results["bcompare-vscode"] = "OK"
+                        } else {
+                            Write-Log "[WARN] Beyond Compare VSCode Extension install exited with code $($installProc.ExitCode)" "WARN"
+                            $results["bcompare-vscode"] = "WARN"
+                        }
+                    } else {
+                        Write-Log "[WARN] 'code' command not found in PATH. Cannot install extension." "WARN"
+                        $results["bcompare-vscode"] = "WARN"
+                    }
+                } catch {
+                    Write-Log "[ERROR] Failed to install Beyond Compare VSCode Extension: $_" "ERROR"
+                    $results["bcompare-vscode"] = "ERROR"
+                }
+            } else {
+                Write-Log "[WARN] Beyond Compare VSCode Extension .vsix not found at $vsixPath" "WARN"
+                $results["bcompare-vscode"] = "WARN"
+            }
+            # Verify the extension is installed
+            $extDir = Join-Path $env:USERPROFILE ".vscode\extensions"
+            $bcompareExtFound = Get-ChildItem -Path $extDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "scootersoftware.bcompare-vscode*" }
+            if ($bcompareExtFound) {
+                Write-Log "[OK] Verified: Beyond Compare VSCode Extension is installed at $($bcompareExtFound.FullName)" "INFO"
+            } else {
+                Write-Log "[WARN] Beyond Compare VSCode Extension directory not found under $extDir" "WARN"
+                if ($results["bcompare-vscode"] -eq "OK") { $results["bcompare-vscode"] = "WARN" }
+            }
+            $status = if ($results["bcompare-vscode"] -eq "OK") { "Completed" } else { "Failed" }
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare VSCode Extension" -Status $status
+        }
+    } else {
+        Write-Log "[SKIP] Beyond Compare VSCode Extension (disabled by config)" "INFO"
+        $results["bcompare-vscode"] = "SKIP"
+    }
+} catch {
+    Write-Log "Beyond Compare VSCode Extension install block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    $results["bcompare-vscode"] = "ERROR"
+    if ($tools.'bcompare-vscode'.enabled) {
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare VSCode Extension" -Status "Failed"
+    }
+}
+
 # Order 14: Visual Studio Community
 try {
     if ($tools.vscommunity.enabled) {
@@ -1167,7 +1232,7 @@ $criticalTools = @{
     "7-Zip" = @("C:\Program Files\7-Zip\7zFM.exe", "C:\Program Files (x86)\7-Zip\7zFM.exe")
     "Notepad++" = @("C:\Program Files\Notepad++\notepad++.exe", "C:\Program Files (x86)\Notepad++\notepad++.exe")
     "Brave Browser" = @("C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe")
-    "Beyond Compare 4" = @("C:\Program Files\Beyond Compare 4\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 4\BCompare.exe")
+    "Beyond Compare 5" = @("C:\Program Files\Beyond Compare 5\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 5\BCompare.exe")
 }
 
 $finalVerify = @{}
@@ -1188,7 +1253,7 @@ foreach ($toolName in $criticalTools.Keys) {
 }
 
 # Check critical PATH commands
-$criticalCommands = @("ollama", "node", "npm", "python", "pip", "code", "git")
+$criticalCommands = @("ollama", "node", "npm", "python", "pip", "code", "git", "bcompare")
 foreach ($cmd in $criticalCommands) {
     $cmdPath = Get-Command $cmd -ErrorAction SilentlyContinue
     if ($cmdPath) {
@@ -1196,6 +1261,19 @@ foreach ($cmd in $criticalCommands) {
     } else {
         Write-Log "  [WARN] Command '$cmd' NOT in PATH" "WARN"
     }
+}
+
+# Check for Beyond Compare VSCode Extension
+$extDir = Join-Path $env:USERPROFILE ".vscode\extensions"
+if (Test-Path $extDir) {
+    $bcompareExt = Get-ChildItem -Path $extDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "scootersoftware.bcompare-vscode*" } | Select-Object -First 1
+    if ($bcompareExt) {
+        Write-Log "  [OK] Beyond Compare VSCode Extension installed: $($bcompareExt.Name)" "INFO"
+    } else {
+        Write-Log "  [WARN] Beyond Compare VSCode Extension NOT installed in $extDir" "WARN"
+    }
+} else {
+    Write-Log "  [WARN] VSCode extensions directory not found at $extDir" "WARN"
 }
 
 # Write verification report

@@ -1,5 +1,27 @@
 # Changelog
 
+## [2026.06.14.23.50] — 2026-06-14
+
+### Changed
+- **Beyond Compare**: Bumped from v4 to v5.2.2 (latest, build 32209). v4 is no longer being patched. Fallback remains v4.4.7 for compatibility.
+- **Final verification**: Updated to look for `Beyond Compare 5\BCompare.exe` instead of v4 path.
+
+### Added
+- **`bcompare-vscode` tool entry** in `config/tools.json` — Beyond Compare VSCode Extension v1.0.7
+  - Download URL: `https://github.com/ScooterSoftware/bcompare-vscode/releases/download/1.0.7/bcompare-vscode-1.0.7.vsix`
+  - Marketplace fallback: VSCode Marketplace
+  - Installed via `code --install-extension` after VSCode and Beyond Compare are installed
+- **Install block** in `sandbox-bootstrap.ps1` between VSCode (Order 13) and VS Community (Order 14):
+  - Checks both prerequisites (VSCode and Beyond Compare must be `OK`)
+  - Runs `code --install-extension <vsix> --force`
+  - Verifies installation via filesystem check at `%USERPROFILE%\.vscode\extensions\scootersoftware.bcompare-vscode*`
+  - Gracefully skips with WARN if prerequisites missing
+- **`-SkipBCompareVSCode` switch** in `Launch-AISandbox.ps1` param block
+- **Verification**: Added "Beyond Compare VSCode Extension" check to `Final Verification Pass` (filesystem check under `.vscode\extensions`)
+- **Critical commands**: Added `bcompare` to PATH command verification list
+
+---
+
 ## [2026.06.14.23.39] — 2026-06-14
 
 ### Fixed

@@ -73,15 +73,16 @@
       "order": 5
     },
     "beyondcompare": {
-      "name": "Beyond Compare 4",
+      "name": "Beyond Compare 5",
       "enabled": true,
-      "downloadType": "scootersoftware",
-      "url": "https://www.scootersoftware.com/download/v4",
+      "downloadType": "direct",
+      "url": "https://www.scootersoftware.com/files/BCompare-5.2.2.32209.exe",
       "fallbackUrl": "https://www.scootersoftware.com/files/BCompare-4.4.7.28397.exe",
       "fileName": "BCompare-installer.exe",
       "silentArgs": "/silent",
       "skipFlag": "SkipBeyondCompare",
-      "order": 6
+      "order": 6,
+      "_note": "Bumped from v4 to v5.2.2 (latest). v4 is no longer being patched. v5 runs on Windows 11 24H2/25H2 x64."
     },
     "ollama": {
       "name": "Ollama",
@@ -155,6 +156,19 @@
       "silentArgs": "/verysilent /mergetasks=!runcode,addcontextmenufiles,addcontextmenufolders,addtopath",
       "skipFlag": "SkipVSCode",
       "order": 13
+    },
+    "bcompare-vscode": {
+      "name": "Beyond Compare VSCode Extension",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://github.com/ScooterSoftware/bcompare-vscode/releases/download/1.0.7/bcompare-vscode-1.0.7.vsix",
+      "fallbackUrl": "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ScooterSoftware/vsextensions/bcompare-vscode/1.0.7/vspackage",
+      "fileName": "bcompare-vscode.vsix",
+      "silentArgs": "",
+      "skipFlag": "SkipBCompareVSCode",
+      "order": 13.5,
+      "_note": "VSCode extension installed via `code --install-extension` after VSCode is installed. Requires Beyond Compare (vs Compare 5) to be installed first.",
+      "_dependsOn": "vscode,beyondcompare"
     },
     "vscommunity": {
       "name": "Visual Studio Community",

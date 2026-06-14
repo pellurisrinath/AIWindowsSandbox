@@ -26,6 +26,7 @@ param(
     [switch]$SkipADK,
     [switch]$SkipADKWinPE,
     [switch]$SkipAntigravity,
+    [switch]$SkipBCompareVSCode,
     [int]$SandboxMemoryMB = 16384,
     [switch]$PreCacheOnly,
     [switch]$CleanCache,
