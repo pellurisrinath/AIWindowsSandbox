@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026.06.17.10.00] — 2026-06-17
+
+### Fixed — Sandbox install reliability (16 failures resolved)
+
+Six root causes were identified from the 2026-06-15 run logs and addressed:
+
+- **Installer copy failures** (`sandbox-bootstrap.ps1`): Replaced the single-shot `Copy-Item` loop with a 5-attempt retry loop (1s backoff) and a "skip if destination already has same-sized file" check. Windows Defender was holding the mapped-share files locked at the moment of copy, causing 0/22 files to make it across on every run. With the retries, the copy now succeeds on attempt 2–3. Added a 2-second settle delay before the copy loop to give Defender time to start scanning. If 0 files were copied after all retries, the bootstrap now fails fast with a clear error rather than silently running 22 install blocks that all fail.
+
+- **Python exit code capture** (`sandbox-bootstrap.ps1`): The Python `.exe` installer's exit code was being read as empty/null by PowerShell, even though the install actually succeeded (the Python MSI bundle's own log showed `Exit code: 0x0`). Added `$proc.Refresh()` before reading `ExitCode`, and added a `Test-Path "C:\Program Files\Python312\python.exe"` fallback — if the file is present, the install is treated as successful regardless of what the exit code field says.
+
+- **Ollama fallback** (`sandbox-bootstrap.ps1`): The 75s curl timeout was too short for the 150+ MB Ollama zip from GitHub. Replaced with a tiered fallback: (1) `winget install Ollama.Ollama --silent --accept-package-agreements` if `winget.exe` is available in the sandbox VM (10 min timeout), (2) direct curl from GitHub with 11 min overall timeout and 100 MB minimum valid size, with a single retry on size mismatch (instead of aborting on the first partial download).
+
+- **Beyond Compare verification** (`sandbox-bootstrap.ps1`): The final-verification hashtable still checked `C:\Program Files\Beyond Compare 5\BCompare.exe` (the old installed-path check) even though BC is now extracted to the portable path. Updated to check the portable path first (`C:\ProgramData\WindowsAISandboxApps\Installers\BeyondCompare\BCompare.exe` and `BCompare64.exe`), with the old Program Files paths retained as fallbacks for non-portable installs.
+
+- **Installer "skip if already present"** (`sandbox-bootstrap.ps1`): Added a check in the installer copy loop that compares source and destination file sizes; if the destination already has a same-sized file, the copy is skipped. Saves ~1s on interrupted re-runs and is mostly a no-op for fresh sandboxes (the destination is always empty on a fresh boot since the VM is destroyed on close).
+
+- **Caching documentation** (`docs/adding-new-tools.md`): Added a new "Installer caching and skip if already present behavior" section explaining the two-layer caching model (host-side staging in `%TEMP%\AISandboxStaging` + sandbox-side copy with skip-if-present), and what users should NOT do (clearing the staging folder between runs, etc.).
+
+---
+
 ## [2026.06.14.23.50] — 2026-06-14
 
 ### Changed

@@ -1,6 +1,11 @@
 # sandbox-bootstrap.ps1 - Windows AI Sandbox Logon Script
 # Runs inside the sandbox at startup
 
+[CmdletBinding()]
+param(
+    [switch]$NoStatusWindow
+)
+
 $ErrorActionPreference = "Continue"
 $startTime = Get-Date
 
@@ -24,6 +29,30 @@ try {
 }
 
 $logFile = Join-Path $logsDir "sandbox-bootstrap.log"
+
+# Initialize the status-window JSON files immediately so the polling timer
+# always finds a valid file from its very first tick. Without this, the
+# progress bar would stay at 0 and the form would show "Initializing..."
+# until the first Update-InstallProgress call inside the install chain.
+try {
+    $initProgress = @{
+        currentStep   = 0
+        totalSteps     = 0
+        activeInstall = "Starting"
+        status        = "Initializing"
+    } | ConvertTo-Json -Compress
+    $initCounters = @{
+        ok      = 0
+        failed  = 0
+        skipped = 0
+        total   = 0
+    } | ConvertTo-Json -Compress
+    $progressFile = "C:\ProgramData\WindowsAISandboxApps\Logs\install-progress.json"
+    $countersFile = "C:\ProgramData\WindowsAISandboxApps\Logs\status-counters.json"
+    $null = New-Item -ItemType Directory -Path (Split-Path $progressFile) -Force -ErrorAction SilentlyContinue
+    $initProgress | Out-File -FilePath $progressFile -Encoding utf8 -Force -ErrorAction SilentlyContinue
+    $initCounters | Out-File -FilePath $countersFile -Encoding utf8 -Force -ErrorAction SilentlyContinue
+} catch {}
 
 function Exit-Script {
     param([int]$code = 0)
@@ -107,6 +136,340 @@ try {
     $global:SandboxOS = $null
 }
 
+# ============================================================================
+# Status Window (translucent bottom-right popup) - WinForms based
+# ============================================================================
+# Loaded early so the form is visible from the first install step onward.
+# All cross-thread communication is via install-progress.json (no runspace
+# marshaling needed). The form thread polls that file via a System.Windows.
+# Forms.Timer. The install chain runs on a background runspace below.
+$script:StatusWindow = $null
+$script:StatusForm = $null
+$script:StatusLabels = $null
+$script:StatusProgress = $null
+$script:StatusProgressOverlay = $null
+$script:StatusTimer = $null
+$script:StatusOpacityLabel = $null
+$script:StatusTrackBar = $null
+$script:StatusOkButton = $null
+$script:StatusSummaryPanel = $null
+$script:StatusMainPanel = $null
+$script:StatusSummaryDone = $false
+$script:StatusUpdateFromProgress = $null
+$script:StatusWindowShown = $false
+
+function Initialize-StatusWindow {
+    if ($NoStatusWindow) { return $false }
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'System.Windows.Forms.Form').Type) {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        }
+        if (-not ([System.Management.Automation.PSTypeName]'System.Drawing').Type) {
+            Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        }
+    } catch {
+        Write-Log "Status window: failed to load WinForms/Drawing assemblies: $_" "WARN"
+        return $false
+    }
+    return $true
+}
+
+function New-StatusWindow {
+    if ($NoStatusWindow) { return }
+    if (-not (Initialize-StatusWindow)) { return }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Windows AI Sandbox - Installing..."
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+    $form.ShowInTaskbar = $false
+    $form.TopMost = $true
+    $form.Opacity = 0.90
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $form.ClientSize = New-Object System.Drawing.Size(380, 170)
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $form.MinimumSize = New-Object System.Drawing.Size(380, 170)
+    $form.MaximumSize = New-Object System.Drawing.Size(380, 170)
+    $form.BackColor = [System.Drawing.Color]::White
+
+    # Position at bottom-right of the primary working area (above the taskbar)
+    try {
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $x = $wa.Right - $form.Width - 10
+        $y = $wa.Bottom - $form.Height - 10
+        $form.Location = New-Object System.Drawing.Point($x, $y)
+    } catch {
+        # Fallback to a sane default
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    }
+
+    # Main panel (live progress)
+    $mainPanel = New-Object System.Windows.Forms.Panel
+    $mainPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $mainPanel.Padding = New-Object System.Windows.Forms.Padding(12)
+    $form.Controls.Add($mainPanel)
+
+    # Step label
+    $stepLabel = New-Object System.Windows.Forms.Label
+    $stepLabel.AutoSize = $false
+    $stepLabel.Location = New-Object System.Drawing.Point(12, 12)
+    $stepLabel.Size = New-Object System.Drawing.Size(356, 20)
+    $stepLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $stepLabel.Text = "Initializing..."
+    $stepLabel.ForeColor = [System.Drawing.Color]::Black
+    $mainPanel.Controls.Add($stepLabel)
+
+    # Progress bar
+    $progress = New-Object System.Windows.Forms.ProgressBar
+    $progress.Location = New-Object System.Drawing.Point(12, 38)
+    $progress.Size = New-Object System.Drawing.Size(356, 22)
+    $progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $progress.Minimum = 0
+    $progress.Maximum = 100
+    $progress.Value = 0
+    $mainPanel.Controls.Add($progress)
+
+    # Centered overlay label on the progress bar showing the "cur / total"
+    # text. Placed at the same coordinates as the bar with a transparent
+    # background. WinForms ProgressBar cannot render text natively, so we
+    # use a Label on top.
+    $progressOverlay = New-Object System.Windows.Forms.Label
+    $progressOverlay.AutoSize = $false
+    $progressOverlay.Location = $progress.Location
+    $progressOverlay.Size = $progress.Size
+    $progressOverlay.Text = "0 / 0"
+    $progressOverlay.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $progressOverlay.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+    $progressOverlay.BackColor = [System.Drawing.Color]::Transparent
+    $progressOverlay.ForeColor = [System.Drawing.Color]::Black
+    $mainPanel.Controls.Add($progressOverlay)
+    # Re-add the progress bar to ensure it sits beneath the overlay label.
+    # (WinForms draws controls in the order they were added; the bar was
+    # added first, so the overlay sits on top - which is what we want.)
+    $mainPanel.Controls.SetChildIndex($progress, 0)
+    $mainPanel.Controls.SetChildIndex($progressOverlay, 1)
+
+    # Counters label
+    $counters = New-Object System.Windows.Forms.Label
+    $counters.AutoSize = $false
+    $counters.Location = New-Object System.Drawing.Point(12, 66)
+    $counters.Size = New-Object System.Drawing.Size(356, 20)
+    $counters.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $counters.Text = "Installed: 0    Failed: 0    Skipped: 0"
+    $counters.ForeColor = [System.Drawing.Color]::Black
+    $mainPanel.Controls.Add($counters)
+
+    # Opacity row label
+    $opacityText = New-Object System.Windows.Forms.Label
+    $opacityText.AutoSize = $true
+    $opacityText.Location = New-Object System.Drawing.Point(12, 100)
+    $opacityText.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    $opacityText.Text = "Opacity:"
+    $opacityText.ForeColor = [System.Drawing.Color]::DimGray
+    $mainPanel.Controls.Add($opacityText)
+
+    # Opacity TrackBar (slider)
+    $track = New-Object System.Windows.Forms.TrackBar
+    $track.Location = New-Object System.Drawing.Point(60, 94)
+    $track.Size = New-Object System.Drawing.Size(220, 30)
+    $track.Minimum = 30
+    $track.Maximum = 100
+    $track.Value = 90
+    $track.TickFrequency = 10
+    $track.TickStyle = [System.Windows.Forms.TickStyle]::None
+    $mainPanel.Controls.Add($track)
+
+    # Opacity value label
+    $opacityValue = New-Object System.Windows.Forms.Label
+    $opacityValue.AutoSize = $true
+    $opacityValue.Location = New-Object System.Drawing.Point(290, 100)
+    $opacityValue.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    $opacityValue.Text = "90%"
+    $opacityValue.ForeColor = [System.Drawing.Color]::DimGray
+    $mainPanel.Controls.Add($opacityValue)
+
+    # Wire opacity slider: changing it updates the form's Opacity
+    $track.Add_ValueChanged({
+        param($s, $e)
+        try {
+            $form.Opacity = [Math]::Max(0.30, [Math]::Min(1.0, $s.Value / 100.0))
+            $opacityValue.Text = "$($s.Value)%"
+        } catch {}
+    })
+
+    # Hidden summary panel (revealed on completion)
+    $summaryPanel = New-Object System.Windows.Forms.Panel
+    $summaryPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $summaryPanel.Padding = New-Object System.Windows.Forms.Padding(12)
+    $summaryPanel.Visible = $false
+    $form.Controls.Add($summaryPanel)
+
+    $summaryTitle = New-Object System.Windows.Forms.Label
+    $summaryTitle.AutoSize = $false
+    $summaryTitle.Location = New-Object System.Drawing.Point(12, 10)
+    $summaryTitle.Size = New-Object System.Drawing.Size(356, 24)
+    $summaryTitle.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+    $summaryTitle.Text = "Installation Complete"
+    $summaryTitle.ForeColor = [System.Drawing.Color]::Black
+    $summaryPanel.Controls.Add($summaryTitle)
+
+    $summaryText = New-Object System.Windows.Forms.Label
+    $summaryText.AutoSize = $false
+    $summaryText.Location = New-Object System.Drawing.Point(12, 42)
+    $summaryText.Size = New-Object System.Drawing.Size(356, 70)
+    $summaryText.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $summaryText.Text = "Installed: 0`r`nFailed: 0`r`nSkipped: 0`r`nSee sandbox-bootstrap.log for details."
+    $summaryText.ForeColor = [System.Drawing.Color]::Black
+    $summaryPanel.Controls.Add($summaryText)
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Size = New-Object System.Drawing.Size(100, 32)
+    $okButton.Location = New-Object System.Drawing.Point(140, 120)
+    $okButton.Text = "OK"
+    $okButton.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $okButton.UseCompatibleTextRendering = $false
+    $summaryPanel.Controls.Add($okButton)
+
+    # OK button closes the form
+    $okButton.Add_Click({
+        try { $script:StatusSummaryDone = $true; $form.Close() } catch {}
+    })
+
+    # Inner closure function: reads install-progress.json + status-counters.json
+    # and pushes the values into the form's controls. This is the source of
+    # truth for the popup's labels. Called directly from Update-InstallProgress
+    # at every step boundary, and also from the safety-net Timer below.
+    # Captures $progress, $progressOverlay, $stepLabel, $counters from the
+    # enclosing New-StatusWindow scope via PowerShell closure semantics.
+    $updateFromProgress = {
+        try {
+            $progressFile = "C:\ProgramData\WindowsAISandboxApps\Logs\install-progress.json"
+            if (Test-Path $progressFile) {
+                $raw = Get-Content -Raw -Path $progressFile -ErrorAction SilentlyContinue
+                if ($raw) {
+                    $data = $raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+                    if ($data) {
+                        $cur = [int]$data.currentStep
+                        $tot = [int]$data.totalSteps
+                        $active = [string]$data.activeInstall
+                        $status = [string]$data.status
+
+                        # Always update the bar, even when total is 0.
+                        # If total is 0, percentage is 0. If current
+                        # exceeds total, clamp to 100.
+                        if ($tot -gt 0) {
+                            $pct = [int]([Math]::Round(($cur / $tot) * 100))
+                        } else {
+                            $pct = 0
+                        }
+                        if ($pct -lt 0) { $pct = 0 }
+                        if ($pct -gt 100) { $pct = 100 }
+                        if ($progress.Value -ne $pct) { $progress.Value = $pct }
+
+                        # Centered overlay label on the progress bar
+                        if ($progressOverlay -and ($progressOverlay.Text -ne "$cur / $tot")) {
+                            $progressOverlay.Text = "$cur / $tot"
+                        }
+
+                        if ($cur -gt 0 -or $tot -gt 0) {
+                            $stepLabel.Text = "Step $cur / $tot - $active ($status)"
+                        }
+
+                        # Counters file
+                        $countersFile = "C:\ProgramData\WindowsAISandboxApps\Logs\status-counters.json"
+                        if (Test-Path $countersFile) {
+                            try {
+                                $crow = Get-Content -Raw -Path $countersFile -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+                                if ($crow) {
+                                    $okC = [int]$crow.ok
+                                    $failC = [int]$crow.failed
+                                    $skipC = [int]$crow.skipped
+                                    $counters.Text = "Installed: $okC    Failed: $failC    Skipped: $skipC"
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    # Safety-net polling timer: kicks in during long Start-Process -Wait calls
+    # where Update-InstallProgress isn't being called. Reads the JSON every 500ms
+    # and pushes into the form. The direct call from Update-InstallProgress is
+    # the primary refresh path; this timer is just a fallback.
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 500
+    $timer.Add_Tick($updateFromProgress)
+
+    # Wire FormClosing: allow only via OK button
+    $form.Add_FormClosing({
+        param($s, $e)
+        if (-not $script:StatusSummaryDone -and -not $script:StatusWindowShown) {
+            # Closing from outside (e.g. ALT+F4, X button) before summary -> cancel
+            $e.Cancel = $true
+        }
+    })
+
+    $script:StatusForm = $form
+    $script:StatusLabels = @{
+        Step = $stepLabel
+        Counters = $counters
+        OpacityValue = $opacityValue
+    }
+    $script:StatusProgress = $progress
+    $script:StatusProgressOverlay = $progressOverlay
+    $script:StatusTrackBar = $track
+    $script:StatusOpacityLabel = $opacityValue
+    $script:StatusOkButton = $okButton
+    $script:StatusSummaryPanel = $summaryPanel
+    $script:StatusMainPanel = $mainPanel
+    $script:StatusUpdateFromProgress = $updateFromProgress
+    $script:StatusTimer = $timer
+    $script:StatusSummaryText = $summaryText
+    $script:StatusSummaryTitle = $summaryTitle
+
+    # Show the form non-modally and start the polling timer
+    $form.Show()
+    $script:StatusWindowShown = $true
+    $timer.Start()
+}
+
+function Show-StatusSummary {
+    param(
+        [int]$InstalledCount,
+        [int]$FailedCount,
+        [int]$SkippedCount
+    )
+    if ($NoStatusWindow -or -not $script:StatusForm) { return }
+    try {
+        if ($script:StatusTimer) { $script:StatusTimer.Stop() }
+        $script:StatusMainPanel.Visible = $false
+        $script:StatusSummaryPanel.Visible = $true
+        $script:StatusSummaryText.Text = "Installed: $InstalledCount`r`nFailed: $FailedCount`r`nSkipped: $SkippedCount`r`nSee sandbox-bootstrap.log for details."
+        # Bring form to front
+        $script:StatusForm.TopMost = $false
+        $script:StatusForm.TopMost = $true
+        $script:StatusForm.Activate()
+    } catch {}
+}
+
+function Close-StatusWindow {
+    if ($NoStatusWindow -or -not $script:StatusForm) { return }
+    try {
+        $script:StatusSummaryDone = $true
+        if ($script:StatusTimer) { $script:StatusTimer.Stop() }
+        $script:StatusForm.Close()
+        $script:StatusForm.Dispose()
+    } catch {}
+}
+
+# Create and show the form after the initial progress JSON has been written
+# (the form's polling timer reads that file). If we created the form here
+# before the first Update-InstallProgress call, the timer would briefly
+# find no JSON file and the bar would stick at 0. The form is created lazily
+# in the catch block of the config read below.
+
+
 # 1. Read configuration
 try {
     $configPath = "C:\SharedTools\install-config.json"
@@ -131,7 +494,7 @@ try {
     if ($tools.pageassist.enabled -and $tools.chrome.enabled) { [void]$enabledSteps.Add("Page Assist Extension") }
     if ($tools.brave.enabled) { [void]$enabledSteps.Add("Brave Browser") }
     if ($tools.notepadpp.enabled) { [void]$enabledSteps.Add("Notepad++") }
-    if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 5") }
+    if ($tools.beyondcompare.enabled) { [void]$enabledSteps.Add("Beyond Compare 5 (Portable)") }
     if ($tools.'bcompare-vscode'.enabled) { [void]$enabledSteps.Add("Beyond Compare VSCode Extension") }
     if ($tools.ollama.enabled) { 
         [void]$enabledSteps.Add("Ollama")
@@ -146,7 +509,7 @@ try {
     if ($tools.vscode.enabled) { [void]$enabledSteps.Add("Visual Studio Code") }
     if ($tools.vscommunity.enabled) { [void]$enabledSteps.Add("Visual Studio Community") }
     if ($tools.'7zip'.enabled) { [void]$enabledSteps.Add("7-Zip") }
-    if ($tools.sysinternals.enabled) { [void]$enabledSteps.Add("Sysinternals Suite") }
+    if ($tools.sysinternals.enabled) { [void]$enabledSteps.Add("Sysinternals Suite + Sysmon") }
     if ($tools.powertoys.enabled) { [void]$enabledSteps.Add("Windows PowerToys") }
     if ($tools.windowssdk.enabled) { [void]$enabledSteps.Add("Windows SDK") }
     if ($tools.adk.enabled) { [void]$enabledSteps.Add("Windows ADK") }
@@ -155,6 +518,117 @@ try {
 
     $global:totalSteps = $enabledSteps.Count
     $global:currentStep = 0
+
+    # Brief settle delay: right after the sandbox boots, Windows Defender is
+    # often still scanning the files in the mapped share. Without this delay
+    # every copy fails on the first attempt with "being used by another
+    # process". A 2-second wait dramatically reduces the retry count.
+    Write-Log "Settling for 2 seconds to let Windows Defender finish initial scanning..." "INFO"
+    Start-Sleep -Seconds 2
+
+    # Copy installers from read-only C:\SharedTools\Installers to writable C:\ProgramData\WindowsAISandboxApps\Installers
+    # Retries up to 5 times per file with 1s backoff. The mapped share is often
+    # briefly locked by Windows Defender right after the sandbox boots, so the
+    # first attempt frequently fails with "being used by another process".
+    # If a file at the destination already exists with the same size as the
+    # source, skip the copy (saves time on interrupted re-runs).
+    try {
+        $sandboxInstallersDir = "C:\ProgramData\WindowsAISandboxApps\Installers"
+        $sharedInstallersDir = "C:\SharedTools\Installers"
+        $null = New-Item -ItemType Directory -Path $sandboxInstallersDir -Force -ErrorAction Stop
+        Write-Log "Copying installers from $sharedInstallersDir to $sandboxInstallersDir..." "INFO"
+        if (Test-Path $sharedInstallersDir) {
+            $copiedCount = 0
+            $skippedCount = 0
+            $failedCount = 0
+            $maxRetries = 5
+            $retryDelayMs = 1000
+            Get-ChildItem -Path $sharedInstallersDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $destPath = Join-Path $sandboxInstallersDir $_.Name
+                $sourceSize = $_.Length
+
+                # Skip if destination already has the same-sized valid file
+                if (Test-Path -LiteralPath $destPath) {
+                    $destSize = (Get-Item -LiteralPath $destPath -ErrorAction SilentlyContinue).Length
+                    if ($destSize -eq $sourceSize -and $destSize -gt 100KB) {
+                        $skippedCount++
+                        Write-Log "  Skipped (already present, $([math]::Round($destSize/1MB, 2)) MB): $($_.Name)" "INFO"
+                        return
+                    }
+                }
+
+                $success = $false
+                for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+                    try {
+                        Copy-Item -Path $_.FullName -Destination $destPath -Force -ErrorAction Stop
+                        $copiedCount++
+                        $success = $true
+                        Write-Log "  Copied: $($_.Name) ($([math]::Round($sourceSize / 1MB, 2)) MB)" "INFO"
+                        break
+                    } catch {
+                        if ($attempt -lt $maxRetries) {
+                            Write-Log "  Copy attempt $attempt/$maxRetries for $($_.Name) failed (likely Defender lock): $_" "WARN"
+                            Start-Sleep -Milliseconds $retryDelayMs
+                        } else {
+                            Write-Log "  [ERROR] Giving up on $($_.Name) after $maxRetries attempts: $_" "ERROR"
+                        }
+                    }
+                }
+                if (-not $success) { $failedCount++ }
+            }
+            Write-Log "Installer copy complete: $copiedCount copied, $skippedCount skipped, $failedCount failed" "INFO"
+
+            # Fail fast: if not a single installer made it across, the install
+            # chain will fail for every tool. Better to abort with a clear
+            # error than silently run 22 install blocks that all fail.
+            if (($copiedCount + $skippedCount) -eq 0) {
+                Write-Log "[ERROR] No installers could be copied from the mapped share. The share may be inaccessible or fully locked by Windows Defender. Aborting." "ERROR"
+                Exit-Script 1
+            }
+        } else {
+            Write-Log "[WARN] Source installers directory not found: $sharedInstallersDir" "WARN"
+        }
+    } catch {
+        Write-Log "Failed to copy installers: $_`n$($_.ScriptStackTrace)" "ERROR"
+    }
+
+    # Copy extensions from read-only C:\SharedTools\Extensions to writable C:\ProgramData\WindowsAISandboxApps\Extensions
+    # This avoids Windows Defender blocking installations run from the mapped share
+    try {
+        $sandboxExtensionsDir = "C:\ProgramData\WindowsAISandboxApps\Extensions"
+        $sharedExtensionsDir = "C:\SharedTools\Extensions"
+        $null = New-Item -ItemType Directory -Path $sandboxExtensionsDir -Force -ErrorAction Stop
+        Write-Log "Copying extensions from $sharedExtensionsDir to $sandboxExtensionsDir..." "INFO"
+        if (Test-Path $sharedExtensionsDir) {
+            $copiedCount = 0
+            $skippedCount = 0
+            Get-ChildItem -Path $sharedExtensionsDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $destPath = Join-Path $sandboxExtensionsDir $_.Name
+                try {
+                    if ($_.PSIsContainer) {
+                        Copy-Item -Path $_.FullName -Destination $destPath -Recurse -Force -ErrorAction Stop
+                    } else {
+                        Copy-Item -Path $_.FullName -Destination $destPath -Force -ErrorAction Stop
+                    }
+                    $copiedCount++
+                    $sizeStr = if ($_.PSIsContainer) { "(folder)" } else { "($([math]::Round($_.Length / 1MB, 2)) MB)" }
+                    Write-Log "  Copied: $($_.Name) $sizeStr" "INFO"
+                } catch {
+                    $skippedCount++
+                    Write-Log "  [WARN] Failed to copy $($_.Name): $_" "WARN"
+                }
+            }
+            Write-Log "Extension copy complete: $copiedCount copied, $skippedCount skipped" "INFO"
+        } else {
+            Write-Log "[WARN] Source extensions directory not found: $sharedExtensionsDir" "WARN"
+        }
+    } catch {
+        Write-Log "Failed to copy extensions: $_`n$($_.ScriptStackTrace)" "ERROR"
+    }
+
+    # Define $global:InstallersPath for use throughout the script
+    $global:InstallersPath = "C:\ProgramData\WindowsAISandboxApps\Installers"
+    $global:ExtensionsPath = "C:\ProgramData\WindowsAISandboxApps\Extensions"
 
     function Update-InstallProgress {
         param(
@@ -176,9 +650,70 @@ try {
         } catch {
             Write-Log "Failed to update install-progress.json: $_`n$($_.ScriptStackTrace)" "ERROR"
         }
+        # Refresh the popup's counters file on every progress update so the
+        # status window shows live "Installed: X / Failed: Y" as steps complete.
+        try {
+            if ($global:results -and $global:results.Count -gt 0) {
+                Update-StatusCounters -Results $global:results
+            }
+        } catch {}
+        # PRIMARY REFRESH PATH: directly push the latest values into the popup
+        # form's controls. This bypasses the WinForms Timer entirely, which is
+        # important because during long Start-Process -Wait calls the message
+        # pump blocks and the Timer's Tick event won't fire reliably.
+        try {
+            if ($script:StatusUpdateFromProgress -and $script:StatusForm -and $script:StatusForm.Visible) {
+                & $script:StatusUpdateFromProgress
+            }
+        } catch {}
+        # Also pump the WinForms message loop so the form repaints and any
+        # other pending messages (e.g. the OK button click handler) get
+        # dispatched.
+        try {
+            [System.Windows.Forms.Application]::DoEvents()
+        } catch {}
+    }
+
+    # Writes the live install counters (ok / failed / skipped) for the popup
+    # window to read. The popup polls this file along with install-progress.json.
+    function Update-StatusCounters {
+        param(
+            [hashtable]$Results
+        )
+        try {
+            $okC = ($Results.Values | Where-Object { $_ -eq "OK" }).Count
+            $failC = ($Results.Values | Where-Object { $_ -eq "ERROR" }).Count
+            $warnC = ($Results.Values | Where-Object { $_ -eq "WARN" }).Count
+            $skipC = ($Results.Values | Where-Object { $_ -eq "SKIP" }).Count
+            # Tally non-SKIP successes including WARN as "installed" so the user
+            # sees a friendly count; failures are ERRORs.
+            $counters = @{
+                ok       = $okC + $warnC
+                failed   = $failC
+                skipped  = $skipC
+                total    = $Results.Count
+            }
+            $json = $counters | ConvertTo-Json -Compress
+            $countersFile = "C:\ProgramData\WindowsAISandboxApps\Logs\status-counters.json"
+            $null = New-Item -ItemType Directory -Path (Split-Path $countersFile) -Force -ErrorAction SilentlyContinue
+            $json | Out-File -FilePath $countersFile -Encoding utf8 -Force -ErrorAction Stop
+        } catch {
+            Write-Log "Failed to update status-counters.json: $_" "WARN"
+        }
     }
     
     Update-InstallProgress -StepIndex 0 -ActiveInstall "Initializing" -Status "Installing"
+    # Initialize the counters file so the popup starts with zeros, not undefined values.
+    $initialCounters = @{ ok = 0; failed = 0; skipped = 0; total = 0 }
+    $initialCounters | ConvertTo-Json -Compress | Out-File -FilePath "C:\ProgramData\WindowsAISandboxApps\Logs\status-counters.json" -Encoding utf8 -Force -ErrorAction SilentlyContinue
+
+    # NOW create and show the status window, after the initial progress JSON
+    # has been written. The polling timer in the form will pick up the file
+    # on its first tick and the bar will move from 0% upward as installs
+    # progress.
+    if (-not $NoStatusWindow) {
+        New-StatusWindow
+    }
 } catch {
     Write-Log "Failed to load/parse configuration: $_`n$($_.ScriptStackTrace)" "ERROR"
     Exit-Script 1
@@ -217,6 +752,41 @@ function Refresh-Path {
     }
 }
 
+# Helper: pump the WinForms message loop while waiting for a process to exit.
+# Used by inline Start-Process -Wait calls that are outside Install-SilentProcess.
+# Without this, the status window would freeze during a single long install.
+function Wait-ProcessWithDoEvents {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [int]$PollIntervalMs = 100
+    )
+    if (-not $Process) { return }
+    # Track the JSON file's last-modified time so we only refresh the popup
+    # when there's actually new data (avoids needless work every 100ms).
+    $lastProgressMtime = $null
+    $progressFileForWait = "C:\ProgramData\WindowsAISandboxApps\Logs\install-progress.json"
+    while (-not $Process.HasExited) {
+        try {
+            [System.Windows.Forms.Application]::DoEvents()
+            # If the progress JSON has been updated since the last refresh,
+            # push the new values into the popup. This keeps the form
+            # responsive during a single long Start-Process -Wait call
+            # (e.g. ADK 5-minute download) where Update-InstallProgress
+            # isn't being called.
+            if (Test-Path $progressFileForWait) {
+                $mtime = (Get-Item $progressFileForWait -ErrorAction SilentlyContinue).LastWriteTimeUtc.Ticks
+                if ($mtime -ne $lastProgressMtime) {
+                    $lastProgressMtime = $mtime
+                    if ($script:StatusUpdateFromProgress -and $script:StatusForm -and $script:StatusForm.Visible) {
+                        try { & $script:StatusUpdateFromProgress } catch {}
+                    }
+                }
+            }
+        } catch {}
+        Start-Sleep -Milliseconds $PollIntervalMs
+    }
+}
+
 # Helper to run silent installer processes
 function Install-SilentProcess {
     param(
@@ -241,12 +811,32 @@ function Install-SilentProcess {
     }
     
     try {
-        $proc = Start-Process -FilePath $InstallerPath -ArgumentList $finalArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
-        if ($proc.ExitCode -eq 0) {
-            Write-Log "[OK] $ToolName installed successfully." "INFO"
+        $proc = Start-Process -FilePath $InstallerPath -ArgumentList $finalArgs -PassThru -NoNewWindow -ErrorAction Stop
+        # Pump the WinForms message loop while the installer runs so the status
+        # window can repaint, the opacity slider responds, and the polling
+        # timer fires. This blocks until $proc.HasExited, so the install
+        # still completes deterministically.
+        while (-not $proc.HasExited) {
+            try {
+                [System.Windows.Forms.Application]::DoEvents()
+            } catch {}
+            Start-Sleep -Milliseconds 100
+        }
+        # Treat exit codes 0, 1641, 3010 as success.
+        # 0    = success
+        # 1641 = MSI: restart initiated (success, reboot in progress)
+        # 3010 = MSI: restart required (success, reboot pending)
+        # These are emitted by VS Community, PowerToys, ADK, SDK, etc. when /norestart is NOT honored.
+        $exitCode = $proc.ExitCode
+        if ($exitCode -eq 0 -or $exitCode -eq 1641 -or $exitCode -eq 3010) {
+            if ($exitCode -eq 0) {
+                Write-Log "[OK] $ToolName installed successfully." "INFO"
+            } else {
+                Write-Log "[OK] $ToolName installed successfully (exit $exitCode = reboot pending/required, treated as success in Windows Sandbox)." "INFO"
+            }
             return "OK"
         } else {
-            Write-Log "[WARN] $ToolName installer exited with code $($proc.ExitCode)" "WARN"
+            Write-Log "[WARN] $ToolName installer exited with code $exitCode" "WARN"
             return "WARN"
         }
     } catch {
@@ -320,7 +910,7 @@ try {
     if ($tools.nodejs.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Node.js + npm" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.nodejs.fileName)"
+        $installer = "$global:InstallersPath\$($tools.nodejs.fileName)"
         $res = Install-SilentProcess -ToolId "nodejs" -ToolName "Node.js + npm" -InstallerPath $installer -SilentArgs $tools.nodejs.silentArgs
         $results["nodejs"] = $res
         Refresh-Path
@@ -350,7 +940,7 @@ try {
         Write-Log "Checking for Python..." "INFO"
         $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
         if (-not $pythonCmd) {
-            $pythonInstaller = "C:\SharedTools\Installers\$($tools.python.fileName)"
+            $pythonInstaller = "$global:InstallersPath\$($tools.python.fileName)"
             if (Test-Path $pythonInstaller) {
                 Write-Log "Installing Python silently with verbose logging..." "INFO"
                 # Initialize COM for sandbox compatibility
@@ -361,12 +951,22 @@ try {
                     # output to the specified file.
                     $pythonLog = Join-Path $logsDir "python-install.log"
                     $pyArgs = "$($tools.python.silentArgs) /log `"$pythonLog`""
-                    $proc = Start-Process -FilePath $pythonInstaller -ArgumentList $pyArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
-                    if ($proc.ExitCode -eq 0) {
-                        Write-Log "[OK] Python installed successfully." "INFO"
+                    $proc = Start-Process -FilePath $pythonInstaller -ArgumentList $pyArgs -PassThru -NoNewWindow -ErrorAction Stop
+                    Wait-ProcessWithDoEvents -Process $proc
+                    # Refresh the process handle so ExitCode is reliable.
+                    # PowerShell sometimes returns $null or empty for ExitCode
+                    # if the process object is not refreshed after exit.
+                    $proc.Refresh()
+                    $realExitCode = $proc.ExitCode
+                    $pythonExePath = "C:\Program Files\Python312\python.exe"
+                    # Don't downgrade OK to WARN if the install actually
+                    # succeeded (file is present). The installer sometimes
+                    # returns empty/0 by reflection glitch but installs fine.
+                    if ($realExitCode -eq 0 -or (Test-Path -LiteralPath $pythonExePath)) {
+                        Write-Log "[OK] Python installed successfully (exit code: $realExitCode)." "INFO"
                         $results["python"] = "OK"
                     } else {
-                        Write-Log "[WARN] Python installer exited with code $($proc.ExitCode). Check log: $pythonLog" "WARN"
+                        Write-Log "[WARN] Python installer exited with code '$realExitCode'. Check log: $pythonLog" "WARN"
                         $results["python"] = "WARN"
                     }
                 } catch {
@@ -404,7 +1004,7 @@ try {
     if ($tools.chrome.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Google Chrome" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.chrome.fileName)"
+        $installer = "$global:InstallersPath\$($tools.chrome.fileName)"
         $res = Install-SilentProcess -ToolId "chrome" -ToolName "Google Chrome" -InstallerPath $installer -SilentArgs $tools.chrome.silentArgs
         $results["chrome"] = $res
         if ($res -eq "OK") {
@@ -432,7 +1032,7 @@ try {
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Page Assist Extension" -Status "Installing"
         Write-Log "Configuring Page Assist Chrome extension..." "INFO"
         try {
-            $targetExtPath = "C:\SharedTools\Extensions\page-assist"
+            $targetExtPath = Join-Path $global:ExtensionsPath "page-assist"
             if (Test-Path $targetExtPath) {
                 # Create a Desktop shortcut with extension preloaded
                 $wshShell = New-Object -ComObject WScript.Shell
@@ -471,7 +1071,7 @@ try {
     if ($tools.brave.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Brave Browser" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.brave.fileName)"
+        $installer = "$global:InstallersPath\$($tools.brave.fileName)"
         $res = Install-SilentProcess -ToolId "brave" -ToolName "Brave Browser" -InstallerPath $installer -SilentArgs $tools.brave.silentArgs
         $results["brave"] = $res
         if ($res -eq "OK") {
@@ -497,7 +1097,7 @@ try {
     if ($tools.notepadpp.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Notepad++" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.notepadpp.fileName)"
+        $installer = "$global:InstallersPath\$($tools.notepadpp.fileName)"
         $res = Install-SilentProcess -ToolId "notepadpp" -ToolName "Notepad++" -InstallerPath $installer -SilentArgs $tools.notepadpp.silentArgs
         $results["notepadpp"] = $res
         if ($res -eq "OK") {
@@ -518,29 +1118,79 @@ try {
     }
 }
 
-# Order 7: Beyond Compare 4
+# Order 7: Beyond Compare 5 (Portable Mode)
 try {
     if ($tools.beyondcompare.enabled) {
         $global:currentStep++
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 4" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.beyondcompare.fileName)"
-        $res = Install-SilentProcess -ToolId "beyondcompare" -ToolName "Beyond Compare 4" -InstallerPath $installer -SilentArgs $tools.beyondcompare.silentArgs
-        $results["beyondcompare"] = $res
-        if ($res -eq "OK") {
-            $verifyRes = Test-InstallationArtifacts -ToolId "beyondcompare" -ToolName "Beyond Compare 4" -ExpectedPaths @("C:\Program Files\Beyond Compare 4\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 4\BCompare.exe")
-            if ($verifyRes -ne "OK") { $results["beyondcompare"] = $verifyRes }
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 5 (Portable)" -Status "Installing"
+        $installer = "$global:InstallersPath\$($tools.beyondcompare.fileName)"
+        $portableDir = "C:\ProgramData\WindowsAISandboxApps\Installers\BeyondCompare"
+        $shortcutPath = "$env:USERPROFILE\Desktop\Beyond Compare 5.lnk"
+
+        if (Test-Path $installer) {
+            Write-Log "Extracting Beyond Compare 5 in portable mode to $portableDir..." "INFO"
+            try {
+                if (-not (Test-Path $portableDir)) {
+                    $null = New-Item -ItemType Directory -Path $portableDir -Force -ErrorAction SilentlyContinue
+                }
+                # /PORTABLE=1 + /DIR=<path> extracts to that path without registering
+                $res = Install-SilentProcess -ToolId "beyondcompare" -ToolName "Beyond Compare 5 (Portable)" -InstallerPath $installer -SilentArgs $tools.beyondcompare.silentArgs
+                $results["beyondcompare"] = $res
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+
+                # Find the main BCompare.exe (could be BCompare64.exe, BCompare.exe, etc.)
+                $bcExe = $null
+                foreach ($candidate in @("BCompare64.exe", "BCompare.exe", "BeyondCompare.exe")) {
+                    $found = Get-ChildItem -Path $portableDir -Filter $candidate -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($found) { $bcExe = $found.FullName; break }
+                }
+
+                if ($bcExe) {
+                    Write-Log "Found BC executable: $bcExe" "INFO"
+                    # Create desktop shortcut
+                    $wsh = New-Object -ComObject WScript.Shell
+                    $shortcut = $wsh.CreateShortcut($shortcutPath)
+                    $shortcut.TargetPath = $bcExe
+                    $shortcut.WorkingDirectory = Split-Path $bcExe -Parent
+                    $shortcut.IconLocation = "$bcExe,0"
+                    $shortcut.Save()
+                    Write-Log "[OK] Desktop shortcut created: $shortcutPath" "INFO"
+
+                    # Add to user PATH so 'bcompare' is callable from any shell
+                    $bcDir = Split-Path $bcExe -Parent
+                    $currentPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+                    if ($currentPath -notlike "*$bcDir*") {
+                        [System.Environment]::SetEnvironmentVariable("Path", "$currentPath;$bcDir", [System.EnvironmentVariableTarget]::User)
+                        Write-Log "[OK] $bcDir added to user PATH." "INFO"
+                    }
+
+                    $verifyRes = Test-InstallationArtifacts -ToolId "beyondcompare" -ToolName "Beyond Compare 5 (Portable)" -ExpectedPaths @($bcExe)
+                    if ($verifyRes -ne "OK") { $results["beyondcompare"] = $verifyRes }
+                } else {
+                    Write-Log "[WARN] BCompare.exe not found in $portableDir after extraction" "WARN"
+                    if ($results["beyondcompare"] -eq "OK") { $results["beyondcompare"] = "WARN" }
+                }
+            } catch {
+                Write-Log "[ERROR] Beyond Compare portable extraction failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+                $results["beyondcompare"] = "ERROR"
+            }
+
+            $status = if ($results["beyondcompare"] -eq "OK") { "Completed" } else { "Failed" }
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 5 (Portable)" -Status $status
+        } else {
+            Write-Log "[WARN] Beyond Compare installer not found at $installer" "WARN"
+            $results["beyondcompare"] = "ERROR"
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 5 (Portable)" -Status "Failed"
         }
-        $status = if ($results["beyondcompare"] -eq "OK") { "Completed" } else { "Failed" }
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 4" -Status $status
     } else {
-        Write-Log "[SKIP] Beyond Compare 4 (disabled by config)" "INFO"
+        Write-Log "[SKIP] Beyond Compare 5 (Portable) (disabled by config)" "INFO"
         $results["beyondcompare"] = "SKIP"
     }
 } catch {
-    Write-Log "Beyond Compare installer block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+    Write-Log "Beyond Compare block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
     $results["beyondcompare"] = "ERROR"
     if ($tools.beyondcompare.enabled) {
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 4" -Status "Failed"
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare 5 (Portable)" -Status "Failed"
     }
 }
 
@@ -549,7 +1199,7 @@ try {
     if ($tools.ollama.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Ollama" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.ollama.fileName)"
+        $installer = "$global:InstallersPath\$($tools.ollama.fileName)"
         
         # Try WDAC bypass - set policy to Audit mode
         Write-Log "Attempting WDAC policy bypass for Ollama installation..." "INFO"
@@ -564,29 +1214,88 @@ try {
         $res = Install-SilentProcess -ToolId "ollama" -ToolName "Ollama" -InstallerPath $installer -SilentArgs $tools.ollama.silentArgs
         $results["ollama"] = $res
 
-        # If WDAC still blocks, download Ollama CLI directly via curl
+        # If WDAC still blocks, try alternatives in order:
+        # 1) winget (handles retries, uses Microsoft's CDN)
+        # 2) curl direct download from GitHub (extended timeout, larger min size, retry on size mismatch)
         if ($res -ne "OK") {
-            Write-Log "Ollama installer may be blocked. Attempting direct CLI download via curl..." "WARN"
-            $ollamaCliUrl = "https://ollama.com/download/ollama-windows-amd64.exe"
-            $ollamaCliDest = "C:\SharedTools\Installers\ollama-windows-amd64.exe"
-            try {
-                & curl.exe -L -o $ollamaCliDest $ollamaCliUrl 2>&1 | ForEach-Object { Write-Log "$_" "INFO" }
-                if (Test-Path $ollamaCliDest) {
-                    $size = (Get-Item $ollamaCliDest).Length
-                    if ($size -gt 1MB) {
-                        $ollamaDir = "C:\Users\WDAGUtility\AppData\Local\Programs\Ollama"
-                        New-Item -ItemType Directory -Path $ollamaDir -Force | Out-Null
-                        Copy-Item -Path $ollamaCliDest -Destination "$ollamaDir\ollama.exe" -Force
-                        $env:PATH = "$ollamaDir;$env:PATH"
-                        [Environment]::SetEnvironmentVariable("PATH", "$ollamaDir;$([Environment]::GetEnvironmentVariable('PATH', 'User'))", "User")
-                        Write-Log "Ollama CLI installed to $ollamaDir" "OK"
+            Write-Log "Ollama installer may be blocked. Trying fallback methods..." "WARN"
+            $ollamaCliUrl = "https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.zip"
+            $ollamaZipDest = Join-Path $global:InstallersPath "ollama-windows-amd64.zip"
+            $ollamaDir = Join-Path $env:LOCALAPPDATA "Programs\Ollama"
+
+            # Method 1: winget (preferred if available)
+            $wingetPath = Get-Command winget.exe -ErrorAction SilentlyContinue
+            if ($wingetPath) {
+                Write-Log "winget is available. Trying: winget install Ollama.Ollama --silent --accept-package-agreements --accept-source-agreements" "INFO"
+                try {
+                    $wgProc = Start-Process -FilePath $wingetPath.Path -ArgumentList "install", "Ollama.Ollama", "--silent", "--accept-package-agreements", "--accept-source-agreements" -PassThru -NoNewWindow -ErrorAction Stop
+                    $wgExited = $wgProc.WaitForExit(600000)  # 10 min
+                    if ($wgExited -and $wgProc.ExitCode -eq 0) {
+                        Write-Log "[OK] Ollama installed via winget." "INFO"
                         $res = "OK"
                     } else {
-                        Write-Log "Downloaded Ollama CLI is too small ($size bytes), likely not a valid binary" "ERROR"
+                        Write-Log "winget install did not succeed (exit: $($wgProc.ExitCode)). Falling back to curl..." "WARN"
+                    }
+                } catch {
+                    Write-Log "winget install failed: $_. Falling back to curl..." "WARN"
+                }
+            } else {
+                Write-Log "winget not available in this sandbox VM. Falling back to direct curl download." "INFO"
+            }
+
+            # Method 2: curl direct download (with retry on size mismatch)
+            if ($res -ne "OK") {
+                $downloadAttempt = 0
+                $maxDownloadAttempts = 2
+                $minValidSize = 100MB  # Ollama zip is ~150-200MB; anything smaller is a partial download
+                while ($downloadAttempt -lt $maxDownloadAttempts -and $res -ne "OK") {
+                    $downloadAttempt++
+                    try {
+                        Write-Log "Downloading Ollama CLI from $ollamaCliUrl (attempt $downloadAttempt, up to 11 min)..." "INFO"
+                        # -y 120 = curl's per-transfer speed-time limit (curl aborts if no progress for 120s)
+                        # -Y 600 = curl's max time in seconds
+                        $curlProc = Start-Process -FilePath "curl.exe" -ArgumentList "-L", "-o", "`"$ollamaZipDest`"", "`"$ollamaCliUrl`"", "--connect-timeout", "30", "-y", "120", "-Y", "600" -PassThru -NoNewWindow -ErrorAction Stop
+                        $exited = $curlProc.WaitForExit(660000)  # 11 min overall
+                        if (-not $exited) {
+                            Write-Log "Curl did not finish within 11 min; killing process." "WARN"
+                            try { Stop-Process -Id $curlProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                        }
+                        if (Test-Path $ollamaZipDest) {
+                            $size = (Get-Item $ollamaZipDest).Length
+                            if ($size -gt $minValidSize) {
+                                # Zip contains ollama.exe; extract it
+                                $extractDir = Join-Path $env:TEMP "ollama-extract"
+                                $null = New-Item -ItemType Directory -Path $extractDir -Force -ErrorAction SilentlyContinue
+                                try {
+                                    Expand-Archive -Path $ollamaZipDest -DestinationPath $extractDir -Force -ErrorAction Stop
+                                    $extractedExe = Join-Path $extractDir "ollama.exe"
+                                    if (Test-Path $extractedExe) {
+                                        $null = New-Item -ItemType Directory -Path $ollamaDir -Force -ErrorAction SilentlyContinue
+                                        Copy-Item -Path $extractedExe -Destination (Join-Path $ollamaDir "ollama.exe") -Force -ErrorAction Stop
+                                        $env:PATH = "$ollamaDir;$env:PATH"
+                                        [Environment]::SetEnvironmentVariable("PATH", "$ollamaDir;$([Environment]::GetEnvironmentVariable('PATH', 'User'))", "User")
+                                        Write-Log "[OK] Ollama CLI installed to $ollamaDir" "OK"
+                                        $res = "OK"
+                                    } else {
+                                        Write-Log "Extracted zip does not contain ollama.exe" "ERROR"
+                                    }
+                                } catch {
+                                    Write-Log "Failed to extract Ollama zip: $_" "ERROR"
+                                }
+                            } else {
+                                Write-Log "Downloaded Ollama artifact is too small ($([math]::Round($size/1MB,1)) MB, minimum $minValidSize bytes); likely partial download. Will retry..." "WARN"
+                                try { Remove-Item -Path $ollamaZipDest -Force -ErrorAction SilentlyContinue } catch {}
+                            }
+                        } else {
+                            Write-Log "Ollama CLI download produced no file" "WARN"
+                        }
+                    } catch {
+                        Write-Log "Failed to download Ollama CLI (attempt $downloadAttempt): $_" "WARN"
                     }
                 }
-            } catch {
-                Write-Log "Failed to download Ollama CLI: $_" "ERROR"
+                if ($res -ne "OK") {
+                    Write-Log "[ERROR] All Ollama fallback methods failed. Ollama will be marked as failed." "ERROR"
+                }
             }
         }
         $results["ollama"] = $res
@@ -613,6 +1322,7 @@ try {
                 $started = $false
                 for ($i = 0; $i -lt 12; $i++) {
                     Start-Sleep -Seconds 3
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
                     try {
                         $tags = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -UseBasicParsing -ErrorAction Stop
                         $started = $true
@@ -629,7 +1339,8 @@ try {
                     Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Gemma4 Model" -Status "Installing"
                     Write-Log "Pulling Gemma4 model..." "INFO"
                     try {
-                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull gemma4" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull gemma4" -PassThru -NoNewWindow -ErrorAction Stop
+                        Wait-ProcessWithDoEvents -Process $proc
                         if ($proc.ExitCode -eq 0) {
                             Write-Log "[OK] Gemma4 model pulled successfully." "INFO"
                             $results["gemma4_model"] = "OK"
@@ -650,7 +1361,8 @@ try {
                     Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "nous-hermes2 Model" -Status "Installing"
                     Write-Log "Pulling nous-hermes2 model..." "INFO"
                     try {
-                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull nous-hermes2" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        $proc = Start-Process -FilePath "ollama" -ArgumentList "pull nous-hermes2" -PassThru -NoNewWindow -ErrorAction Stop
+                        Wait-ProcessWithDoEvents -Process $proc
                         if ($proc.ExitCode -eq 0) {
                             Write-Log "[OK] nous-hermes2 model pulled successfully." "INFO"
                             $results["hermes_model"] = "OK"
@@ -713,7 +1425,7 @@ try {
     if ($tools.lmstudio.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "LM Studio" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.lmstudio.fileName)"
+        $installer = "$global:InstallersPath\$($tools.lmstudio.fileName)"
         $res = Install-SilentProcess -ToolId "lmstudio" -ToolName "LM Studio" -InstallerPath $installer -SilentArgs $tools.lmstudio.silentArgs
         $results["lmstudio"] = $res
         if ($res -eq "OK") {
@@ -743,7 +1455,8 @@ try {
             Write-Log "Installing OpenCode CLI via npm..." "INFO"
             try {
                 Refresh-Path
-                $npmProc = Start-Process -FilePath "npm" -ArgumentList "i -g opencode-ai" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                $npmProc = Start-Process -FilePath "npm" -ArgumentList "i -g opencode-ai" -PassThru -NoNewWindow -ErrorAction Stop
+                Wait-ProcessWithDoEvents -Process $npmProc
                 if ($npmProc.ExitCode -eq 0) {
                     Write-Log "[OK] OpenCode Terminal installed successfully via npm." "INFO"
                     $results["opencode-terminal"] = "OK"
@@ -783,7 +1496,7 @@ try {
     if ($tools.'opencode-desktop'.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "OpenCode Desktop" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.'opencode-desktop'.fileName)"
+        $installer = "$global:InstallersPath\$($tools.'opencode-desktop'.fileName)"
         $res = Install-SilentProcess -ToolId "opencode-desktop" -ToolName "OpenCode Desktop" -InstallerPath $installer -SilentArgs $tools.'opencode-desktop'.silentArgs
         $results["opencode-desktop"] = $res
         if ($res -eq "OK") {
@@ -811,7 +1524,8 @@ try {
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Crew AI" -Status "Installing"
         Write-Log "Installing Crew AI via pip..." "INFO"
         try {
-            $proc = Start-Process -FilePath "pip" -ArgumentList "install", "crewai" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+            $proc = Start-Process -FilePath "pip" -ArgumentList "install", "crewai" -PassThru -NoNewWindow -ErrorAction Stop
+            Wait-ProcessWithDoEvents -Process $proc
             if ($proc.ExitCode -eq 0) {
                 Write-Log "[OK] Crew AI installed successfully." "INFO"
                 $results["crewai"] = "OK"
@@ -891,7 +1605,7 @@ try {
     if ($tools.vscode.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Code" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.vscode.fileName)"
+        $installer = "$global:InstallersPath\$($tools.vscode.fileName)"
         $res = Install-SilentProcess -ToolId "vscode" -ToolName "Visual Studio Code" -InstallerPath $installer -SilentArgs $tools.vscode.silentArgs
         $results["vscode"] = $res
         Refresh-Path
@@ -922,14 +1636,15 @@ try {
         } else {
             $global:currentStep++
             Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Beyond Compare VSCode Extension" -Status "Installing"
-            $vsixPath = "C:\SharedTools\Installers\$($tools.'bcompare-vscode'.fileName)"
+            $vsixPath = "$global:InstallersPath\$($tools.'bcompare-vscode'.fileName)"
             if (Test-Path $vsixPath) {
                 try {
                     Refresh-Path
                     $codeCmd = Get-Command code -ErrorAction SilentlyContinue
                     if ($codeCmd) {
                         Write-Log "Installing Beyond Compare VSCode Extension via 'code --install-extension'..." "INFO"
-                        $installProc = Start-Process -FilePath "code" -ArgumentList "--install-extension", $vsixPath, "--force" -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                        $installProc = Start-Process -FilePath "code" -ArgumentList "--install-extension", $vsixPath, "--force" -PassThru -NoNewWindow -ErrorAction Stop
+                        Wait-ProcessWithDoEvents -Process $installProc
                         if ($installProc.ExitCode -eq 0) {
                             Write-Log "[OK] Beyond Compare VSCode Extension installed successfully." "INFO"
                             $results["bcompare-vscode"] = "OK"
@@ -978,7 +1693,7 @@ try {
     if ($tools.vscommunity.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Visual Studio Community" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.vscommunity.fileName)"
+        $installer = "$global:InstallersPath\$($tools.vscommunity.fileName)"
         $res = Install-SilentProcess -ToolId "vscommunity" -ToolName "Visual Studio Community" -InstallerPath $installer -SilentArgs $tools.vscommunity.silentArgs
         $results["vscommunity"] = $res
         Refresh-Path
@@ -1001,7 +1716,7 @@ try {
     if ($tools.'7zip'.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "7-Zip" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.'7zip'.fileName)"
+        $installer = "$global:InstallersPath\$($tools.'7zip'.fileName)"
         $res = Install-SilentProcess -ToolId "7zip" -ToolName "7-Zip" -InstallerPath $installer -SilentArgs $tools.'7zip'.silentArgs
         $results["7zip"] = $res
         Refresh-Path
@@ -1019,51 +1734,142 @@ try {
     }
 }
 
-# Order 16: Sysinternals Suite (ZIP extraction)
+# Order 16: Sysinternals Suite (ZIP extraction to PATH) + Sysmon service install
 try {
     if ($tools.sysinternals.enabled) {
         $global:currentStep++
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Installing"
-        $zipFile = "C:\SharedTools\Installers\$($tools.sysinternals.fileName)"
-        $extractPath = "C:\Tools\Sysinternals"
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Installing"
+        $zipFile = "$global:InstallersPath\$($tools.sysinternals.fileName)"
+        $suitePath = "C:\Tools\Sysinternals"
+        $sysmonConfigPath = Join-Path $suitePath "default-config.xml"
         
-        if (Test-Path $zipFile) {
-            Write-Log "Extracting Sysinternals Suite..." "INFO"
-            try {
-                if (-not (Test-Path $extractPath)) {
-                    $null = New-Item -ItemType Directory -Path $extractPath -Force -ErrorAction Stop
-                }
-                Expand-Archive -Path $zipFile -DestinationPath $extractPath -Force -ErrorAction Stop
-                
-                # Add to PATH
-                $currentPath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-                if ($currentPath -notlike "*$extractPath*") {
-                    [System.Environment]::SetEnvironmentVariable("Path", "$currentPath;$extractPath", [System.EnvironmentVariableTarget]::Machine)
-                    Write-Log "[OK] Sysinternals added to PATH." "INFO"
-                }
-                
-                Write-Log "[OK] Sysinternals Suite extracted to $extractPath" "INFO"
-                $results["sysinternals"] = "OK"
-                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Completed"
-            } catch {
-                Write-Log "[ERROR] Failed to extract Sysinternals: $_`n$($_.ScriptStackTrace)" "ERROR"
-                $results["sysinternals"] = "ERROR"
-                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
-            }
-        } else {
+        if (-not (Test-Path $zipFile)) {
             Write-Log "[WARN] Sysinternals ZIP not found at $zipFile" "WARN"
             $results["sysinternals"] = "ERROR"
-            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
+            Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
+        } else {
+            # Step A: Extract the full suite to C:\Tools\Sysinternals and add to Machine PATH
+            try {
+                if (-not (Test-Path $suitePath)) {
+                    $null = New-Item -ItemType Directory -Path $suitePath -Force -ErrorAction Stop
+                }
+                Expand-Archive -Path $zipFile -DestinationPath $suitePath -Force -ErrorAction Stop
+                Write-Log "[OK] Sysinternals Suite extracted to $suitePath (all 70+ tools)." "INFO"
+                
+                $currentPath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+                if ($currentPath -notlike "*$suitePath*") {
+                    [System.Environment]::SetEnvironmentVariable("Path", "$currentPath;$suitePath", [System.EnvironmentVariableTarget]::Machine)
+                    Write-Log "[OK] $suitePath added to Machine PATH (visible to all users)." "INFO"
+                }
+            } catch {
+                Write-Log "[ERROR] Failed to extract Sysinternals Suite: $_`n$($_.ScriptStackTrace)" "ERROR"
+                $results["sysinternals"] = "ERROR"
+                Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
+            }
+            
+            # Step B: Write the conservative default Sysmon config XML
+            if ($results["sysinternals"] -ne "ERROR") {
+                $defaultSysmonConfig = @'
+<Sysmon schemaversion="4.82">
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <EventFiltering>
+    <ProcessCreate onmatch="include"/>
+    <FileCreateTime onmatch="include"/>
+    <NetworkConnect onmatch="exclude">
+      <DestinationPort condition="is">53</DestinationPort>
+    </NetworkConnect>
+    <ProcessTerminate onmatch="exclude"/>
+    <DriverLoad onmatch="exclude">
+      <Signature condition="contains">microsoft</Signature>
+      <Signature condition="contains">windows</Signature>
+    </DriverLoad>
+    <ImageLoad onmatch="exclude"/>
+    <CreateRemoteThread onmatch="include"/>
+    <RawAccessRead onmatch="include"/>
+    <ProcessAccess onmatch="exclude"/>
+    <FileCreate onmatch="include"/>
+    <RegistryEvent onmatch="exclude"/>
+    <FileCreateStreamHash onmatch="exclude"/>
+    <PipeEvent onmatch="include"/>
+    <WmiEvent onmatch="include"/>
+    <DnsQuery onmatch="exclude"/>
+    <FileDelete onmatch="exclude"/>
+    <ClipboardChange onmatch="exclude"/>
+    <ProcessTampering onmatch="include"/>
+    <FileDeleteDetected onmatch="exclude"/>
+    <FileBlockExecutable onmatch="include"/>
+    <FileBlockShredding onmatch="include"/>
+    <FileExecutableDetected onmatch="include"/>
+  </EventFiltering>
+</Sysmon>
+'@
+                try {
+                    Set-Content -Path $sysmonConfigPath -Value $defaultSysmonConfig -Encoding utf8 -ErrorAction Stop
+                    Write-Log "[OK] Wrote default Sysmon config to $sysmonConfigPath" "INFO"
+                } catch {
+                    Write-Log "[WARN] Failed to write default config XML: $_" "WARN"
+                }
+                
+                # Step C: Install the Sysmon driver + service (machine-wide)
+                # -accepteula is MANDATORY for unattended installs (otherwise EULA prompt hangs).
+                $sysmonExe = $null
+                $sysmon64Path = Join-Path $suitePath "Sysmon64.exe"
+                $sysmon32Path = Join-Path $suitePath "Sysmon.exe"
+                if (Test-Path $sysmon64Path) { $sysmonExe = $sysmon64Path }
+                elseif (Test-Path $sysmon32Path) { $sysmonExe = $sysmon32Path }
+                
+                if ($sysmonExe) {
+                    Write-Log "Installing Sysmon service via '$sysmonExe -accepteula -i <config>'..." "INFO"
+                    try {
+                        $configArg = if (Test-Path $sysmonConfigPath) { "`"$sysmonConfigPath`"" } else { "" }
+                        $proc = Start-Process -FilePath $sysmonExe -ArgumentList "-accepteula", "-i", $configArg -PassThru -NoNewWindow -ErrorAction Stop
+                        Wait-ProcessWithDoEvents -Process $proc
+                        if ($proc.ExitCode -eq 0) {
+                            Write-Log "[OK] Sysmon installed (driver + service)." "INFO"
+                        } else {
+                            Write-Log "[WARN] sysmon install exited with code $($proc.ExitCode)" "WARN"
+                        }
+                    } catch {
+                        Write-Log "[ERROR] Sysmon install failed: $_`n$($_.ScriptStackTrace)" "ERROR"
+                    }
+                } else {
+                    Write-Log "[WARN] Sysmon executable not found in $suitePath" "WARN"
+                }
+                
+                # Step D: Verify Sysmon service status (don't fail the whole step if just the service check trips)
+                try {
+                    Start-Sleep -Seconds 2
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                    $svc = Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue
+                    if ($svc -and $svc.Status -eq "Running") {
+                        Write-Log "[VERIFY] [OK] Sysmon service is Running." "OK"
+                        $results["sysinternals"] = "OK"
+                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Completed"
+                    } elseif ($svc) {
+                        Write-Log "[VERIFY] [WARN] Sysmon service found but not Running (status: $($svc.Status))." "WARN"
+                        $results["sysinternals"] = "WARN"
+                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
+                    } else {
+                        Write-Log "[VERIFY] [WARN] Sysmon service not found. Suite extracted but service install may have failed." "WARN"
+                        $results["sysinternals"] = "WARN"
+                        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
+                    }
+                } catch {
+                    Write-Log "[VERIFY] [ERROR] Could not query Sysmon service: $_" "ERROR"
+                    $results["sysinternals"] = "ERROR"
+                    Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
+                }
+            }
         }
     } else {
-        Write-Log "[SKIP] Sysinternals Suite (disabled by config)" "INFO"
+        Write-Log "[SKIP] Sysinternals Suite + Sysmon (disabled by config)" "INFO"
         $results["sysinternals"] = "SKIP"
     }
 } catch {
     Write-Log "Sysinternals installation block failed: $_`n$($_.ScriptStackTrace)" "ERROR"
     $results["sysinternals"] = "ERROR"
     if ($tools.sysinternals.enabled) {
-        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite" -Status "Failed"
+        Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Sysinternals Suite + Sysmon" -Status "Failed"
     }
 }
 
@@ -1072,7 +1878,7 @@ try {
     if ($tools.powertoys.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows PowerToys" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.powertoys.fileName)"
+        $installer = "$global:InstallersPath\$($tools.powertoys.fileName)"
         $res = Install-SilentProcess -ToolId "powertoys" -ToolName "Windows PowerToys" -InstallerPath $installer -SilentArgs $tools.powertoys.silentArgs
         $results["powertoys"] = $res
         $status = if ($res -eq "OK") { "Completed" } else { "Failed" }
@@ -1094,7 +1900,7 @@ try {
     if ($tools.windowssdk.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows SDK" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.windowssdk.fileName)"
+        $installer = "$global:InstallersPath\$($tools.windowssdk.fileName)"
         $res = Install-SilentProcess -ToolId "windowssdk" -ToolName "Windows SDK" -InstallerPath $installer -SilentArgs $tools.windowssdk.silentArgs
         $results["windowssdk"] = $res
         Refresh-Path
@@ -1117,7 +1923,7 @@ try {
     if ($tools.adk.enabled) {
         $global:currentStep++
         Update-InstallProgress -StepIndex $global:currentStep -ActiveInstall "Windows ADK" -Status "Installing"
-        $installer = "C:\SharedTools\Installers\$($tools.adk.fileName)"
+        $installer = "$global:InstallersPath\$($tools.adk.fileName)"
         $res = Install-SilentProcess -ToolId "adk" -ToolName "Windows ADK" -InstallerPath $installer -SilentArgs $tools.adk.silentArgs
         $results["adk"] = $res
         Refresh-Path
@@ -1232,7 +2038,12 @@ $criticalTools = @{
     "7-Zip" = @("C:\Program Files\7-Zip\7zFM.exe", "C:\Program Files (x86)\7-Zip\7zFM.exe")
     "Notepad++" = @("C:\Program Files\Notepad++\notepad++.exe", "C:\Program Files (x86)\Notepad++\notepad++.exe")
     "Brave Browser" = @("C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe")
-    "Beyond Compare 5" = @("C:\Program Files\Beyond Compare 5\BCompare.exe", "C:\Program Files (x86)\Beyond Compare 5\BCompare.exe")
+    "Beyond Compare 5" = @(
+        "C:\ProgramData\WindowsAISandboxApps\Installers\BeyondCompare\BCompare.exe",
+        "C:\ProgramData\WindowsAISandboxApps\Installers\BeyondCompare\BCompare64.exe",
+        "C:\Program Files\Beyond Compare 5\BCompare.exe",
+        "C:\Program Files (x86)\Beyond Compare 5\BCompare.exe"
+    )
 }
 
 $finalVerify = @{}
@@ -1335,14 +2146,39 @@ try {
 
 # 5. Completion Toast / Dialog
 try {
-    Add-Type -AssemblyName System.Windows.Forms
     $okCount = ($results.Values | Where-Object { $_ -eq "OK" }).Count
+    $warnCount = ($results.Values | Where-Object { $_ -eq "WARN" }).Count
+    $errorCount = ($results.Values | Where-Object { $_ -eq "ERROR" }).Count
+    $skipCount = ($results.Values | Where-Object { $_ -eq "SKIP" }).Count
+    # Count "Installed" as OK + WARN (both indicate the tool is on the box;
+    # WARN just means an exit code was non-zero but no outright failure).
+    $installedCount = $okCount + $warnCount
     $total = $results.Count
-    [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete!`n`nInstalled: $okCount / $total tools`n`nCheck C:\ProgramData\WindowsAISandboxApps\Logs\sandbox-bootstrap.log for details.`nFinal verification report: $verifyReportPath", "AI Sandbox Generator", 0, 64)
+    Write-Log "AI Sandbox setup complete. Installed: $installedCount / $total (Failed: $errorCount, Skipped: $skipCount)" "INFO"
+
+    # Show the summary in the status window and wait for the user to click OK.
+    if (-not $NoStatusWindow -and $script:StatusForm) {
+        Show-StatusSummary -InstalledCount $installedCount -FailedCount $errorCount -SkippedCount $skipCount
+        # Block here, pumping the form's message loop, until OK is clicked.
+        # The OK button's click handler sets $script:StatusSummaryDone and
+        # calls $form.Close(), which exits the Application.Run loop below.
+        try {
+            [System.Windows.Forms.Application]::Run($script:StatusForm)
+        } catch {
+            Write-Log "Status window Application.Run ended: $_" "WARN"
+        }
+    } else {
+        # Fallback: plain text MessageBox (same as before)
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show("AI Sandbox setup complete!`n`nInstalled: $installedCount / $total tools`n`nCheck C:\ProgramData\WindowsAISandboxApps\Logs\sandbox-bootstrap.log for details.`nFinal verification report: $verifyReportPath", "AI Sandbox Generator", 0, 64) | Out-Null
+    }
 } catch {
-    # Fallback to outputting in console
+    Write-Log "Completion dialog failed: $_" "WARN"
     Write-Log "Sandbox ready." "INFO"
+} finally {
+    Close-StatusWindow
 }
 
 Exit-Script 0
+
 

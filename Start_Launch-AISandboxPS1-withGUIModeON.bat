@@ -9,9 +9,15 @@ if %errorlevel% neq 0 (
 
 :: Stop any running Windows Sandbox instance
 echo Checking for running Windows Sandbox instances...
+
+
+PowerShell -ExecutionPolicy Bypass -Command "& {Get-Process -name 'WindowsSandbox*' -IncludeUserName;Get-Process -name 'WindowsSandbox*' | Stop-process -force -Verbose}" 
+
 taskkill /IM WindowsSandbox.exe /F >nul 2>&1
 taskkill /IM WindowsSandboxClient.exe /F >nul 2>&1
 timeout /t 5 /nobreak >nul
+
+
 
 :: Run the launcher in GUI mode
 powershell -ExecutionPolicy Bypass -File "%~dp0Launch-AISandbox.ps1" -GUI

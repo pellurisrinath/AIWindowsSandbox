@@ -699,12 +699,22 @@ function Invoke-SandboxLaunch {
                         }
                     }
                     if ($resolvedUrl) {
-                        Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
-                        if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
-                            throw "Downloaded release asset $stagingFile did not pass binary verification check."
+                        try {
+                            Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
+                            if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
+                                throw "Downloaded release asset $stagingFile did not pass binary verification check (likely an HTML page, not a binary)."
+                            }
+                        } catch {
+                            Write-Log "Asset download/verification failed for $($tool.name): $_" "WARN"
+                            if (Test-Path $stagingFile) {
+                                Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                            }
+                            Write-Log "Marking $($tool.name) as unavailable (will be skipped in sandbox)." "WARN"
+                            $Script:installConfig.tools[$toolName].enabled = $false
                         }
                     } else {
-                        Write-Log "Failed to resolve GitHub asset for $($tool.name) and no fallback URL is available." "ERROR"
+                        Write-Log "Failed to resolve GitHub asset for $($tool.name) and no fallback URL is available. Marking as unavailable." "WARN"
+                        $Script:installConfig.tools[$toolName].enabled = $false
                     }
                 } else {
                     Write-Log "Using cached installer in staging for $($tool.name)" "INFO"
@@ -913,6 +923,16 @@ function Invoke-SandboxLaunch {
       <HostFolder>$sharePath</HostFolder>
       <SandboxFolder>C:\SharedTools</SandboxFolder>
       <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>$sharePath\Installers</HostFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Installers</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>$sharePath\Extensions</HostFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Extensions</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
     </MappedFolder>
     <MappedFolder>
       <HostFolder>$LogsDir</HostFolder>

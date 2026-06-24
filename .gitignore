@@ -17,3 +17,9 @@ Desktop.ini
 # IDE
 .vscode/
 .idea/
+
+# Backup / experimental batch launchers (repo root)
+/Start_Launch-AISandboxPS1-withGUIModeON.bat.bak
+/Start_Launch-AISandboxPS1-CMDMode-NOGUI.bat
+/Start_Launch-AISandboxPS1-CMDMode-NOGUI.bat.bak
+/Start_Lauch-AISandboxPS1-withGUIModeON.bat.bak
