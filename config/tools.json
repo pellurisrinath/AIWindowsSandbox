@@ -1,15 +1,24 @@
 {
+  "_metadata": {
+    "targetOS": "Windows 11 24H2 or 25H2",
+    "minBuildNumber": 26100,
+    "recommendedBuildNumber": 26200,
+    "architecture": "x64",
+    "supportedEditions": ["Pro", "Enterprise", "Education"]
+  },
   "tools": {
     "python": {
       "name": "Python",
       "enabled": true,
       "downloadType": "direct",
-      "url": "https://www.python.org/ftp/python/3.12.3/python-3.12.3-amd64.exe",
-      "fileName": "python-installer.exe",
-      "silentArgs": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+      "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe",
+      "fallbackUrl": "https://www.python.org/ftp/python/3.11.10/python-3.11.10-amd64.exe",
+      "fileName": "python-amd64.exe",
+      "silentArgs": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_doc=0 Include_launcher=0",
+      "logFile": "C:\\ProgramData\\WindowsAISandboxApps\\Logs\\python-install.log",
       "skipFlag": "SkipPython",
       "order": 0,
-      "hash": "6b360b0e515d9a930777e5621404c000cfcf55259cf408801d9f8266cb669b38"
+      "_note": "Python 3.12+ ships .exe installers only (not .msi). The .exe accepts /quiet MSI-style arguments."
     },
     "nodejs": {
       "name": "Node.js + npm",
@@ -56,7 +65,7 @@
       "enabled": true,
       "downloadType": "github",
       "url": "https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest",
-      "fallbackUrl": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.8/npp.8.6.8.Installer.x64.exe",
+      "fallbackUrl": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.6.4/npp.8.9.6.4.Installer.x64.exe",
       "assetRegex": "npp\\..*\\.Installer\\.x64\\.exe",
       "fileName": "npp-installer.exe",
       "silentArgs": "/S",
@@ -64,14 +73,16 @@
       "order": 5
     },
     "beyondcompare": {
-      "name": "Beyond Compare 4",
+      "name": "Beyond Compare 5 (Portable)",
       "enabled": true,
-      "downloadType": "scootersoftware",
-      "url": "https://www.scootersoftware.com/download",
-      "fileName": "BCompare-installer.exe",
-      "silentArgs": "/silent",
+      "downloadType": "direct",
+      "url": "https://www.scootersoftware.com/files/BCompare-5.2.2.32209.exe",
+      "fileName": "BCompare-portable.exe",
+      "silentArgs": "/PORTABLE=1 /SILENT /SUPPRESSMSGBOXES /NORESTART /DIR=C:\\ProgramData\\WindowsAISandboxApps\\Installers\\BeyondCompare",
       "skipFlag": "SkipBeyondCompare",
-      "order": 6
+      "order": 6,
+      "hash": "",
+      "_note": "Official portable mode. Extracts to C:\\ProgramData\\WindowsAISandboxApps\\Installers\\BeyondCompare without writing to the registry or Add/Remove Programs. Bootstrap also creates a desktop shortcut to BCompare.exe and adds its directory to user PATH."
     },
     "ollama": {
       "name": "Ollama",
@@ -79,7 +90,7 @@
       "downloadType": "direct",
       "url": "https://ollama.com/download/OllamaSetup.exe",
       "fileName": "OllamaSetup.exe",
-      "silentArgs": "/S",
+      "silentArgs": "/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
       "skipFlag": "SkipOllama",
       "order": 7
     },
@@ -87,22 +98,34 @@
       "name": "LM Studio",
       "enabled": true,
       "downloadType": "direct",
-      "url": "https://releases.lmstudio.ai/windows/latest",
+      "url": "https://lmstudio.ai/download/latest/win32/x64",
+      "fallbackUrl": "https://lmstudio.ai/LM-Studio-Setup.exe",
       "fileName": "LM-Studio-Setup.exe",
       "silentArgs": "/S",
       "skipFlag": "SkipLMStudio",
       "order": 8
     },
-    "opencode": {
-      "name": "OpenCode",
+    "opencode-terminal": {
+      "name": "OpenCode Terminal",
+      "enabled": true,
+      "downloadType": "npm",
+      "url": "",
+      "fallbackUrl": "",
+      "fileName": "",
+      "silentArgs": "",
+      "skipFlag": "SkipOpenCodeTerminal",
+      "order": 9
+    },
+    "opencode-desktop": {
+      "name": "OpenCode Desktop",
       "enabled": true,
       "downloadType": "direct",
-      "url": "https://opencode.ai/download",
-      "fallbackUrl": "https://github.com/opencode-ai/opencode/releases/download/v0.0.1/OpenCodeSetup.exe",
-      "fileName": "OpenCodeSetup.exe",
+      "url": "https://opencode.ai/download/stable/windows-x64-nsis",
+      "fallbackUrl": "https://github.com/anomalyco/opencode/releases/latest/download/opencode-desktop-win-x64.exe",
+      "fileName": "opencode-desktop-win-x64.exe",
       "silentArgs": "/S",
-      "skipFlag": "SkipOpenCode",
-      "order": 9
+      "skipFlag": "SkipOpenCodeDesktop",
+      "order": 10
     },
     "crewai": {
       "name": "Crew AI",
@@ -112,7 +135,7 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCrewAI",
-      "order": 10
+      "order": 11
     },
     "copilot": {
       "name": "Microsoft Copilot PWA",
@@ -122,7 +145,120 @@
       "fileName": "",
       "silentArgs": "",
       "skipFlag": "SkipCopilot",
-      "order": 11
+      "order": 12
+    },
+    "vscode": {
+      "name": "Visual Studio Code",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
+      "fileName": "VSCodeSetup.exe",
+      "silentArgs": "/verysilent /mergetasks=!runcode,addcontextmenufiles,addcontextmenufolders,addtopath /norestart",
+      "skipFlag": "SkipVSCode",
+      "order": 13
+    },
+    "bcompare-vscode": {
+      "name": "Beyond Compare VSCode Extension",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://github.com/ScooterSoftware/bcompare-vscode/releases/download/1.0.7/bcompare-vscode-1.0.7.vsix",
+      "fallbackUrl": "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ScooterSoftware/vsextensions/bcompare-vscode/1.0.7/vspackage",
+      "fileName": "bcompare-vscode.vsix",
+      "silentArgs": "",
+      "skipFlag": "SkipBCompareVSCode",
+      "order": 13.5,
+      "_note": "VSCode extension installed via `code --install-extension` after VSCode is installed. Requires Beyond Compare (vs Compare 5) to be installed first.",
+      "_dependsOn": "vscode,beyondcompare"
+    },
+    "vscommunity": {
+      "name": "Visual Studio Community",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://aka.ms/vs/17/release/vs_community.exe",
+      "fileName": "vs_community.exe",
+      "silentArgs": "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.VisualStudio.Workload.NativeDesktop --add Microsoft.VisualStudio.Workload.Node",
+      "skipFlag": "SkipVSCommunity",
+      "order": 14
+    },
+    "7zip": {
+      "name": "7-Zip",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/ip7z/7zip/releases/latest",
+      "fallbackUrl": "https://www.7-zip.org/a/7z2409-x64.exe",
+      "assetRegex": "7z.*x64\\.exe",
+      "fileName": "7zip-installer.exe",
+      "silentArgs": "/S",
+      "skipFlag": "Skip7Zip",
+      "order": 15
+    },
+    "sysinternals": {
+      "name": "Sysinternals Suite + Sysmon",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://download.sysinternals.com/files/SysinternalsSuite.zip",
+      "fileName": "SysinternalsSuite.zip",
+      "silentArgs": "EXTRACT_AND_INSTALL_SYSMON",
+      "skipFlag": "SkipSysinternals",
+      "order": 16,
+      "hash": "",
+      "_note": "Microsoft ships Sysinternals only as a ZIP (no official MSI exists). The ZIP is extracted to C:\\Tools\\Sysinternals and added to Machine PATH (all users). The bootstrap also runs sysmon64 -accepteula -i <default-config.xml> to install the Sysmon driver + service. -accepteula is mandatory to prevent the EULA prompt from hanging unattended installs."
+    },
+    "powertoys": {
+      "name": "Windows PowerToys",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/microsoft/PowerToys/releases/latest",
+      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.100.0/PowerToysSetup-0.100.0-x64.exe",
+      "assetRegex": "PowerToysSetup.*x64\\.exe",
+      "fileName": "PowerToysSetup.exe",
+      "silentArgs": "/silent /norestart",
+      "skipFlag": "SkipPowerToys",
+      "order": 17
+    },
+    "windowssdk": {
+      "name": "Windows SDK",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/p/?linkid=2237387",
+      "fileName": "WindowsSDK.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipWindowsSDK",
+      "order": 18
+    },
+    "adk": {
+      "name": "Windows ADK",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/?linkid=2289980",
+      "fileName": "adksetup.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipADK",
+      "order": 19
+    },
+    "adkwinpe": {
+      "name": "Windows ADK WinPE Add-on",
+      "enabled": true,
+      "downloadType": "direct",
+      "url": "https://go.microsoft.com/fwlink/?linkid=2289981",
+      "fileName": "adkwinpeaddonssetup.exe",
+      "silentArgs": "/quiet /norestart",
+      "skipFlag": "SkipADKWinPE",
+      "order": 20
+    },
+    "antigravity": {
+      "name": "Antigravity CLI",
+      "enabled": true,
+      "downloadType": "github",
+      "url": "https://api.github.com/repos/google-deepmind/antigravity-cli/releases/latest",
+      "fallbackUrl": "https://github.com/anomalyco/antigravity-cli/releases/latest",
+      "assetRegex": "antigravity.*\\.exe$",
+      "fileName": "antigravity-cli.exe",
+      "silentArgs": "/S",
+      "skipFlag": "SkipAntigravity",
+      "order": 21,
+      "_status": "unavailable",
+      "_note": "Antigravity CLI does not have a public GitHub release. github.com/google-deepmind/antigravity-cli returns 404. The bootstrap gracefully skips this tool."
     }
   }
 }

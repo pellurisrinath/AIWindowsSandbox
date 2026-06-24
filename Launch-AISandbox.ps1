@@ -6,7 +6,8 @@ param(
     [switch]$GUI,
     [switch]$SkipOllama,
     [switch]$SkipLMStudio,
-    [switch]$SkipOpenCode,
+    [switch]$SkipOpenCodeTerminal,
+    [switch]$SkipOpenCodeDesktop,
     [switch]$SkipChrome,
     [switch]$SkipBrave,
     [switch]$SkipNotepadPP,
@@ -16,6 +17,16 @@ param(
     [switch]$SkipCrewAI,
     [switch]$SkipCopilot,
     [switch]$SkipPageAssist,
+    [switch]$SkipVSCode,
+    [switch]$SkipVSCommunity,
+    [switch]$Skip7Zip,
+    [switch]$SkipSysinternals,
+    [switch]$SkipPowerToys,
+    [switch]$SkipWindowsSDK,
+    [switch]$SkipADK,
+    [switch]$SkipADKWinPE,
+    [switch]$SkipAntigravity,
+    [switch]$SkipBCompareVSCode,
     [int]$SandboxMemoryMB = 16384,
     [switch]$PreCacheOnly,
     [switch]$CleanCache,
@@ -92,6 +103,80 @@ function Exit-Script {
     }
 }
 
+# Helper: Get host OS information
+function Get-HostOSInfo {
+    try {
+        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        $arch = (Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue).Architecture
+        # Architecture: 0=x86, 9=x64, 12=ARM64
+        $archName = switch ($arch) {
+            9 { "x64" }
+            12 { "ARM64" }
+            0 { "x86" }
+            default { "Unknown" }
+        }
+        return [PSCustomObject]@{
+            Caption       = $osInfo.Caption
+            Version       = $osInfo.Version
+            BuildNumber   = [int]$osInfo.BuildNumber
+            OSArchitecture = $osInfo.OSArchitecture
+            ProcessorArch = $archName
+            ProductType   = $osInfo.ProductType  # 1=Workstation, 2=DC, 3=Server
+        }
+    } catch {
+        Write-Log "Failed to detect host OS: $_" "WARN"
+        return $null
+    }
+}
+
+# Helper: Check if host meets Windows 11 24H2/25H2 x64 requirements
+function Test-HostOSRequirements {
+    $osInfo = Get-HostOSInfo
+    if ($null -eq $osInfo) {
+        Write-Log "Cannot determine host OS. Proceeding at your own risk." "WARN"
+        return $true
+    }
+
+    Write-Log "Host OS detected: $($osInfo.Caption) (Build $($osInfo.BuildNumber), $($osInfo.OSArchitecture))" "INFO"
+
+    # Check architecture - must be x64
+    if ($osInfo.ProcessorArch -ne "x64") {
+        Write-Log "Unsupported architecture: $($osInfo.ProcessorArch). Only x64 (64-bit) is supported." "ERROR"
+        return $false
+    }
+
+    # Check Windows version - must be 24H2 (Build 26100) or 25H2 (Build 26200)
+    $minBuild = 26100  # Windows 11 24H2
+    if ($osInfo.BuildNumber -lt $minBuild) {
+        $verName = switch ($osInfo.BuildNumber) {
+            22000 { "Windows 11 21H2" }
+            22621 { "Windows 11 22H2" }
+            22631 { "Windows 11 23H2" }
+            default { "Windows (Build $($osInfo.BuildNumber))" }
+        }
+        Write-Log "Host OS is $verName. Minimum required: Windows 11 24H2 (Build 26100) or later." "ERROR"
+        Write-Log "Please update Windows to version 24H2 or 25H2 via Settings > Windows Update." "ERROR"
+        return $false
+    }
+
+    # Check Windows edition - Home is not supported for Windows Sandbox
+    $edition = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name EditionID -ErrorAction SilentlyContinue).EditionID
+    if ($edition -match "Home") {
+        Write-Log "Windows 11 Home edition detected. Windows Sandbox is NOT supported on Home edition." "ERROR"
+        Write-Log "Required: Windows 11 Pro, Enterprise, or Education." "ERROR"
+        return $false
+    }
+
+    # All checks passed
+    $verName = switch ($osInfo.BuildNumber) {
+        26100 { "Windows 11 24H2" }
+        26200 { "Windows 11 25H2" }
+        default { "Windows (Build $($osInfo.BuildNumber))" }
+    }
+    Write-Log "[OK] Host meets requirements: $verName x64 ($edition)" "INFO"
+    return $true
+}
+
 if ($FallbackUsed) {
     Write-Log "Failed to create log directory at C:\ProgramData\AIWindowsSandbox\Logs. Falling back to $LogsDir." "WARN"
 }
@@ -140,6 +225,11 @@ try {
     }
 } catch {
     Write-Log "Error checking or enabling Windows Sandbox feature: $_`n$($_.ScriptStackTrace)" "ERROR"
+    Exit-Script 1
+}
+
+# 2.5 Check Host OS Requirements (Windows 11 24H2/25H2 x64)
+if (-not (Test-HostOSRequirements)) {
     Exit-Script 1
 }
 
@@ -288,7 +378,7 @@ function Get-NodeLtsUrl {
     } catch {
         Write-Log "Failed to query Node.js downloads page: $_`n$($_.ScriptStackTrace)" "WARN"
     }
-    return "https://nodejs.org/dist/v20.12.2/node-v20.12.2-x64.msi" # fallback
+    return "https://nodejs.org/dist/v20.18.0/node-v20.18.0-x64.msi" # fallback
 }
 
 # Helper: Resolve Scooter Software Beyond Compare
@@ -374,11 +464,44 @@ function Verify-DownloadedBinaryContent {
             }
         }
         
+        if ($FilePath.EndsWith(".msi", [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($firstBytes.Length -ge 4 -and 
+                ($firstBytes[0] -ne 0xD0 -or $firstBytes[1] -ne 0xCF -or 
+                 $firstBytes[2] -ne 0x11 -or $firstBytes[3] -ne 0xE0)) {
+                Write-Log "Binary verification failed: MSI file does not start with OLE header (D0 CF 11 E0)." "ERROR"
+                return $false
+            }
+        }
+        
         return $true
     } catch {
         Write-Log "Error verifying downloaded binary content: $_" "ERROR"
         return $false
     }
+}
+
+# Helper: Test if installer is already cached and valid
+function Test-InstallerAlreadyCached {
+    param(
+        [string]$FilePath,
+        [string]$ExpectedHash
+    )
+    if (-not (Test-Path $FilePath)) { return $false }
+    $size = (Get-Item $FilePath).Length
+    if ($size -lt 100KB) { return $false }
+    if (-not (Verify-DownloadedBinaryContent -FilePath $FilePath)) { return $false }
+    if ($ExpectedHash) {
+        if (-not (Verify-FileHash -FilePath $FilePath -ExpectedHash $ExpectedHash)) { return $false }
+    }
+    return $true
+}
+
+# Helper: Verify Windows Sandbox is not already running
+function Test-SandboxNotRunning {
+    $sandbox = Get-Process -Name "WindowsSandbox" -ErrorAction SilentlyContinue
+    $client = Get-Process -Name "WindowsSandboxClient" -ErrorAction SilentlyContinue
+    if ($sandbox -or $client) { return $false }
+    return $true
 }
 
 # Helper: Invoke Windows Defender Threat Scanning
@@ -509,13 +632,22 @@ function Invoke-SandboxLaunch {
             
             $destFile = $null
             $stagingFile = $null
-            if ($tool.fileName -and $tool.downloadType -ne "git" -and $tool.downloadType -ne "pip" -and $tool.downloadType -ne "pwa") {
+            if ($tool.fileName -and $tool.downloadType -ne "git" -and $tool.downloadType -ne "pip" -and $tool.downloadType -ne "pwa" -and $tool.downloadType -ne "npm") {
                 $destFile = Join-Path $installerPath $tool.fileName
                 $stagingFile = Join-Path $stagingPath $tool.fileName
             }
 
+            if ($tool.downloadType -eq "npm") {
+                Write-Log "Tool $($tool.name) will be installed via npm inside the sandbox." "INFO"
+                continue
+            }
+
             if ($tool.downloadType -eq "direct") {
-                if (-not (Test-Path $stagingFile)) {
+                if (-not (Test-InstallerAlreadyCached -FilePath $stagingFile -ExpectedHash $tool.hash)) {
+                    if (Test-Path $stagingFile) {
+                        Write-Log "Cached file is invalid or corrupted. Re-downloading: $($tool.name)" "WARN"
+                        Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                    }
                     try {
                         Download-FileWithProgress -Uri $tool.url -OutFile $stagingFile
                         if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
@@ -549,19 +681,40 @@ function Invoke-SandboxLaunch {
                 }
             }
             elseif ($tool.downloadType -eq "github") {
-                if (-not (Test-Path $stagingFile)) {
-                    $resolvedUrl = Get-GitHubReleaseAssetUrl -ApiUrl $tool.url -RegexPattern $tool.assetRegex
-                    if (-not $resolvedUrl -and $tool.fallbackUrl) {
-                        Write-Log "GitHub API resolution failed for $($tool.name). Falling back to direct URL: $($tool.fallbackUrl)" "WARN"
-                        $resolvedUrl = $tool.fallbackUrl
+                if (-not (Test-InstallerAlreadyCached -FilePath $stagingFile -ExpectedHash $tool.hash)) {
+                    if (Test-Path $stagingFile) {
+                        Write-Log "Cached file is invalid or corrupted. Re-downloading: $($tool.name)" "WARN"
+                        Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                    }
+                    $resolvedUrl = $null
+                    try {
+                        $resolvedUrl = Get-GitHubReleaseAssetUrl -ApiUrl $tool.url -RegexPattern $tool.assetRegex
+                    } catch {}
+                    if ([string]::IsNullOrWhiteSpace($resolvedUrl)) {
+                        if ($tool.fallbackUrl) {
+                            Write-Log "GitHub API resolution failed for $($tool.name). Falling back to direct URL: $($tool.fallbackUrl)" "WARN"
+                            $resolvedUrl = $tool.fallbackUrl
+                        } else {
+                            Write-Log "GitHub API resolution failed for $($tool.name) and no fallback URL is available." "ERROR"
+                        }
                     }
                     if ($resolvedUrl) {
-                        Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
-                        if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
-                            throw "Downloaded release asset $stagingFile did not pass binary verification check."
+                        try {
+                            Download-FileWithProgress -Uri $resolvedUrl -OutFile $stagingFile
+                            if (-not (Verify-DownloadedBinaryContent -FilePath $stagingFile)) {
+                                throw "Downloaded release asset $stagingFile did not pass binary verification check (likely an HTML page, not a binary)."
+                            }
+                        } catch {
+                            Write-Log "Asset download/verification failed for $($tool.name): $_" "WARN"
+                            if (Test-Path $stagingFile) {
+                                Remove-Item -Path $stagingFile -Force -ErrorAction SilentlyContinue
+                            }
+                            Write-Log "Marking $($tool.name) as unavailable (will be skipped in sandbox)." "WARN"
+                            $Script:installConfig.tools[$toolName].enabled = $false
                         }
                     } else {
-                        Write-Log "Failed to resolve GitHub asset for $($tool.name) and no fallback URL is available." "ERROR"
+                        Write-Log "Failed to resolve GitHub asset for $($tool.name) and no fallback URL is available. Marking as unavailable." "WARN"
+                        $Script:installConfig.tools[$toolName].enabled = $false
                     }
                 } else {
                     Write-Log "Using cached installer in staging for $($tool.name)" "INFO"
@@ -713,6 +866,22 @@ function Invoke-SandboxLaunch {
 
     # 6. Save Configuration to Shared Path
     try {
+        # Add host OS info to install-config.json
+        $hostOS = Get-HostOSInfo
+        if ($null -ne $hostOS) {
+            $Script:installConfig.hostOS = @{
+                Caption       = $hostOS.Caption
+                Version       = $hostOS.Version
+                BuildNumber   = $hostOS.BuildNumber
+                Architecture  = $hostOS.OSArchitecture
+                ProcessorArch = $hostOS.ProcessorArch
+                TargetVersion = switch ($hostOS.BuildNumber) {
+                    { $_ -ge 26200 } { "Windows 11 25H2" }
+                    { $_ -ge 26100 } { "Windows 11 24H2" }
+                    default { "Unknown" }
+                }
+            }
+        }
         $Script:installConfig | ConvertTo-Json -Depth 5 | Out-File -FilePath (Join-Path $sharePath "install-config.json") -Encoding utf8 -ErrorAction Stop
         $toolsJsonFileDestination = Join-Path $configPath "tools.json"
         Copy-Item -Path $toolsJsonFile -Destination $toolsJsonFileDestination -Force -ErrorAction Stop
@@ -737,7 +906,14 @@ function Invoke-SandboxLaunch {
 
     # 9. Generate WSB Configuration
     try {
+        # Windows Sandbox inherits host OS - we target Windows 11 24H2/25H2 x64
         $wsbContent = @"
+<!--
+    Windows Sandbox Configuration
+    Target: Windows 11 24H2 (Build 26100) or 25H2 (Build 26200) - x64
+    Architecture: 64-bit (x64) only
+    The Sandbox VM mirrors the host's Windows version.
+-->
 <Configuration>
   <vGPU>Enable</vGPU>
   <Networking>Enable</Networking>
@@ -749,8 +925,18 @@ function Invoke-SandboxLaunch {
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
     <MappedFolder>
+      <HostFolder>$sharePath\Installers</HostFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Installers</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>$sharePath\Extensions</HostFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Extensions</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
       <HostFolder>$LogsDir</HostFolder>
-      <SandboxFolder>C:\ProgramData\AIWindowsSandbox\Logs</SandboxFolder>
+      <SandboxFolder>C:\ProgramData\WindowsAISandboxApps\Logs</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
   </MappedFolders>
@@ -782,6 +968,11 @@ function Invoke-SandboxLaunch {
         $progressFile = Join-Path $LogsDir "install-progress.json"
         if (Test-Path $progressFile) {
             Remove-Item -Path $progressFile -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-SandboxNotRunning)) {
+            Write-Log "Windows Sandbox is already running. Please close it first." "ERROR"
+            Exit-Script 1
         }
 
         $process = Start-Process WindowsSandbox -ArgumentList $wsbPath -PassThru -ErrorAction Stop
@@ -897,7 +1088,7 @@ if ($GUI) {
 
     $Form = New-Object System.Windows.Forms.Form
     $Form.Text = "Windows AI Sandbox Launcher"
-    $Form.Size = New-Object System.Drawing.Size(760, 620)
+    $Form.Size = New-Object System.Drawing.Size(760, 780)
     $Form.StartPosition = "CenterScreen"
     $Form.FormBorderStyle = "FixedDialog"
     $Form.MaximizeBox = $false
@@ -910,7 +1101,7 @@ if ($GUI) {
     $toolsGroupBox = New-Object System.Windows.Forms.GroupBox
     $toolsGroupBox.Text = "Select Tools to Install"
     $toolsGroupBox.Location = New-Object System.Drawing.Point(20, 10)
-    $toolsGroupBox.Size = New-Object System.Drawing.Size(700, 200)
+    $toolsGroupBox.Size = New-Object System.Drawing.Size(700, 360)
     $Form.Controls.Add($toolsGroupBox)
 
     $checkboxes = @{}
@@ -951,7 +1142,7 @@ if ($GUI) {
     # GroupBox for Settings
     $settingsGroupBox = New-Object System.Windows.Forms.GroupBox
     $settingsGroupBox.Text = "Sandbox Settings"
-    $settingsGroupBox.Location = New-Object System.Drawing.Point(20, 220)
+    $settingsGroupBox.Location = New-Object System.Drawing.Point(20, 380)
     $settingsGroupBox.Size = New-Object System.Drawing.Size(700, 60)
     $Form.Controls.Add($settingsGroupBox)
 
@@ -973,13 +1164,13 @@ if ($GUI) {
     # Launch Button
     $launchButton = New-Object System.Windows.Forms.Button
     $launchButton.Text = "Launch Sandbox"
-    $launchButton.Location = New-Object System.Drawing.Point(20, 295)
+    $launchButton.Location = New-Object System.Drawing.Point(20, 455)
     $launchButton.Size = New-Object System.Drawing.Size(150, 35)
     $Form.Controls.Add($launchButton)
 
     # Progress Bar
     $progressBar = New-Object System.Windows.Forms.ProgressBar
-    $progressBar.Location = New-Object System.Drawing.Point(190, 300)
+    $progressBar.Location = New-Object System.Drawing.Point(190, 460)
     $progressBar.Size = New-Object System.Drawing.Size(530, 25)
     $progressBar.Minimum = 0
     $progressBar.Maximum = 100
@@ -989,14 +1180,14 @@ if ($GUI) {
     # Status/Checklist Label
     $statusLabel = New-Object System.Windows.Forms.Label
     $statusLabel.Text = "Ready"
-    $statusLabel.Location = New-Object System.Drawing.Point(190, 330)
+    $statusLabel.Location = New-Object System.Drawing.Point(190, 490)
     $statusLabel.Size = New-Object System.Drawing.Size(530, 20)
     $Form.Controls.Add($statusLabel)
 
     # Checklist GroupBox
     $checklistGroupBox = New-Object System.Windows.Forms.GroupBox
     $checklistGroupBox.Text = "Bootstrap Status Checklist"
-    $checklistGroupBox.Location = New-Object System.Drawing.Point(20, 350)
+    $checklistGroupBox.Location = New-Object System.Drawing.Point(20, 520)
     $checklistGroupBox.Size = New-Object System.Drawing.Size(340, 210)
     $Form.Controls.Add($checklistGroupBox)
 
@@ -1009,7 +1200,7 @@ if ($GUI) {
     # Logs GroupBox
     $logsGroupBox = New-Object System.Windows.Forms.GroupBox
     $logsGroupBox.Text = "Real-time Installation Logs"
-    $logsGroupBox.Location = New-Object System.Drawing.Point(380, 350)
+    $logsGroupBox.Location = New-Object System.Drawing.Point(380, 520)
     $logsGroupBox.Size = New-Object System.Drawing.Size(340, 210)
     $Form.Controls.Add($logsGroupBox)
 
@@ -1081,8 +1272,18 @@ if ($GUI) {
         $chkBc = $checkboxes["beyondcompare"].Checked
         $chkOllama = $checkboxes["ollama"].Checked
         $chkLm = $checkboxes["lmstudio"].Checked
-        $chkOpenCode = $checkboxes["opencode"].Checked
+        $chkOpenCodeTerminal = $checkboxes["opencode-terminal"].Checked
+        $chkOpenCodeDesktop = $checkboxes["opencode-desktop"].Checked
         $chkCopilot = $checkboxes["copilot"].Checked
+        $chkVSCode = $checkboxes["vscode"].Checked
+        $chkVSCommunity = $checkboxes["vscommunity"].Checked
+        $chk7Zip = $checkboxes["7zip"].Checked
+        $chkSysinternals = $checkboxes["sysinternals"].Checked
+        $chkPowerToys = $checkboxes["powertoys"].Checked
+        $chkWindowsSDK = $checkboxes["windowssdk"].Checked
+        $chkADK = $checkboxes["adk"].Checked
+        $chkADKWinPE = $checkboxes["adkwinpe"].Checked
+        $chkAntigravity = $checkboxes["antigravity"].Checked
 
         if ($chkNpm) { [void]$enabledStepsList.Add("Node.js + npm") }
         if ($chkPython) { [void]$enabledStepsList.Add("Python") }
@@ -1093,17 +1294,26 @@ if ($GUI) {
         if ($chkBc) { [void]$enabledStepsList.Add("Beyond Compare 4") }
         if ($chkOllama) { 
             [void]$enabledStepsList.Add("Ollama")
+            [void]$enabledStepsList.Add("Gemma4 Model")
             [void]$enabledStepsList.Add("nous-hermes2 Model")
         }
         if ($chkLm) { [void]$enabledStepsList.Add("LM Studio") }
-        if ($chkOpenCode) { [void]$enabledStepsList.Add("OpenCode") }
+        if ($chkOpenCodeTerminal) { [void]$enabledStepsList.Add("OpenCode Terminal") }
+        if ($chkOpenCodeDesktop) { [void]$enabledStepsList.Add("OpenCode Desktop") }
         if ($chkCrew) { [void]$enabledStepsList.Add("Crew AI") }
         if ($chkCopilot -and $chkChrome) { [void]$enabledStepsList.Add("Microsoft Copilot PWA") }
-        [void]$enabledStepsList.Add("Antigravity 2.0 Check")
-        [void]$enabledStepsList.Add("Hermes Agent CLI Check")
+        if ($chkVSCode) { [void]$enabledStepsList.Add("Visual Studio Code") }
+        if ($chkVSCommunity) { [void]$enabledStepsList.Add("Visual Studio Community") }
+        if ($chk7Zip) { [void]$enabledStepsList.Add("7-Zip") }
+        if ($chkSysinternals) { [void]$enabledStepsList.Add("Sysinternals Suite") }
+        if ($chkPowerToys) { [void]$enabledStepsList.Add("Windows PowerToys") }
+        if ($chkWindowsSDK) { [void]$enabledStepsList.Add("Windows SDK") }
+        if ($chkADK) { [void]$enabledStepsList.Add("Windows ADK") }
+        if ($chkADKWinPE) { [void]$enabledStepsList.Add("Windows ADK WinPE Add-on") }
+        if ($chkAntigravity) { [void]$enabledStepsList.Add("Antigravity CLI") }
 
         foreach ($stepName in $enabledStepsList) {
-            $checkedListBox.Items.Add($stepName, $false)
+            [void]$checkedListBox.Items.Add($stepName, $false)
         }
 
         try {

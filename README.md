@@ -67,6 +67,14 @@ The sandbox will silently install the following software packages depending on s
 
 ---
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=pellurisrinath/AIWindowsSandbox&type=Date)](https://star-history.com/#pellurisrinath/AIWindowsSandbox)
+
+A ⭐ helps other developers find this project.
+
+---
+
 ## Quick Start
 
 1. Open PowerShell as Administrator.

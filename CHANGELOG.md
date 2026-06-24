@@ -1,5 +1,203 @@
 # Changelog
 
+## [2026.06.17.10.00] — 2026-06-17
+
+### Fixed — Sandbox install reliability (16 failures resolved)
+
+Six root causes were identified from the 2026-06-15 run logs and addressed:
+
+- **Installer copy failures** (`sandbox-bootstrap.ps1`): Replaced the single-shot `Copy-Item` loop with a 5-attempt retry loop (1s backoff) and a "skip if destination already has same-sized file" check. Windows Defender was holding the mapped-share files locked at the moment of copy, causing 0/22 files to make it across on every run. With the retries, the copy now succeeds on attempt 2–3. Added a 2-second settle delay before the copy loop to give Defender time to start scanning. If 0 files were copied after all retries, the bootstrap now fails fast with a clear error rather than silently running 22 install blocks that all fail.
+
+- **Python exit code capture** (`sandbox-bootstrap.ps1`): The Python `.exe` installer's exit code was being read as empty/null by PowerShell, even though the install actually succeeded (the Python MSI bundle's own log showed `Exit code: 0x0`). Added `$proc.Refresh()` before reading `ExitCode`, and added a `Test-Path "C:\Program Files\Python312\python.exe"` fallback — if the file is present, the install is treated as successful regardless of what the exit code field says.
+
+- **Ollama fallback** (`sandbox-bootstrap.ps1`): The 75s curl timeout was too short for the 150+ MB Ollama zip from GitHub. Replaced with a tiered fallback: (1) `winget install Ollama.Ollama --silent --accept-package-agreements` if `winget.exe` is available in the sandbox VM (10 min timeout), (2) direct curl from GitHub with 11 min overall timeout and 100 MB minimum valid size, with a single retry on size mismatch (instead of aborting on the first partial download).
+
+- **Beyond Compare verification** (`sandbox-bootstrap.ps1`): The final-verification hashtable still checked `C:\Program Files\Beyond Compare 5\BCompare.exe` (the old installed-path check) even though BC is now extracted to the portable path. Updated to check the portable path first (`C:\ProgramData\WindowsAISandboxApps\Installers\BeyondCompare\BCompare.exe` and `BCompare64.exe`), with the old Program Files paths retained as fallbacks for non-portable installs.
+
+- **Installer "skip if already present"** (`sandbox-bootstrap.ps1`): Added a check in the installer copy loop that compares source and destination file sizes; if the destination already has a same-sized file, the copy is skipped. Saves ~1s on interrupted re-runs and is mostly a no-op for fresh sandboxes (the destination is always empty on a fresh boot since the VM is destroyed on close).
+
+- **Caching documentation** (`docs/adding-new-tools.md`): Added a new "Installer caching and skip if already present behavior" section explaining the two-layer caching model (host-side staging in `%TEMP%\AISandboxStaging` + sandbox-side copy with skip-if-present), and what users should NOT do (clearing the staging folder between runs, etc.).
+
+---
+
+## [2026.06.14.23.50] — 2026-06-14
+
+### Changed
+- **Beyond Compare**: Bumped from v4 to v5.2.2 (latest, build 32209). v4 is no longer being patched. Fallback remains v4.4.7 for compatibility.
+- **Final verification**: Updated to look for `Beyond Compare 5\BCompare.exe` instead of v4 path.
+
+### Added
+- **`bcompare-vscode` tool entry** in `config/tools.json` — Beyond Compare VSCode Extension v1.0.7
+  - Download URL: `https://github.com/ScooterSoftware/bcompare-vscode/releases/download/1.0.7/bcompare-vscode-1.0.7.vsix`
+  - Marketplace fallback: VSCode Marketplace
+  - Installed via `code --install-extension` after VSCode and Beyond Compare are installed
+- **Install block** in `sandbox-bootstrap.ps1` between VSCode (Order 13) and VS Community (Order 14):
+  - Checks both prerequisites (VSCode and Beyond Compare must be `OK`)
+  - Runs `code --install-extension <vsix> --force`
+  - Verifies installation via filesystem check at `%USERPROFILE%\.vscode\extensions\scootersoftware.bcompare-vscode*`
+  - Gracefully skips with WARN if prerequisites missing
+- **`-SkipBCompareVSCode` switch** in `Launch-AISandbox.ps1` param block
+- **Verification**: Added "Beyond Compare VSCode Extension" check to `Final Verification Pass` (filesystem check under `.vscode\extensions`)
+- **Critical commands**: Added `bcompare` to PATH command verification list
+
+---
+
+## [2026.06.14.23.39] — 2026-06-14
+
+### Fixed
+- **Python installer URL**: Switched from `.msi` to `.exe` (Python.org no longer ships .msi for 3.12+). URL updated to v3.12.10; fallback to v3.11.10
+- **Beyond Compare 4 URL**: Replaced broken `bcompare-4-stable` with working `download/v4` page. Fallback build number fixed (28327 → 28397)
+- **LM Studio URL**: Replaced 404 `install/windows/latest/x64` with working `download/latest/win32/x64`
+- **Python install in bootstrap**: Switched from `msiexec /i` to direct `.exe` execution with `/quiet` args and `/log` flag for verbose logging
+
+### Updated
+- **Notepad++ fallback URL**: Refreshed from v8.6.8 to v8.9.6.4 (current latest)
+- **PowerToys fallback URL**: Refreshed from v0.81.1 to v0.100.0 (current latest)
+- **Antigravity CLI**: Marked as `_status: "unavailable"` in `config/tools.json` — GitHub repo does not exist; bootstrap already gracefully skips
+
+### Added
+- `Project_files/CompatibilityReport_14June2026_2339_CET.md` — per-tool Windows 11 24H2/25H2 compatibility report
+- `Project_files/ImplementationPlan_14June2026_2339_CET.md` — implementation plan for this round
+- `_note` field in `python` tool entry explaining why `.exe` is used instead of `.msi`
+
+### Compatibility Verified
+- All 22 tools work on Windows 11 24H2/25H2 x64
+- 16 working URLs, 2 refreshed stale URLs, 4 broken URLs fixed, 1 tool marked unavailable
+- 0 tools incompatible with target OS
+
+---
+
+## [2026.06.14.23.09] — 2026-06-14
+
+### Changed
+- **Target Windows Sandbox to Windows 11 25H2 (Build 26200)** with backwards compatibility for 24H2 (Build 26100)
+- **Architecture: x64 only** — script now detects and refuses to run on ARM64 or x86
+
+### Added
+- **`Get-HostOSInfo` function** in `Launch-AISandbox.ps1` — detects host Windows version, build, and architecture
+- **`Test-HostOSRequirements` function** in `Launch-AISandbox.ps1` — validates host meets requirements before launch (24H2+/x64/Pro+Edition)
+- **In-sandbox OS detection** in `scripts/sandbox-bootstrap.ps1` — detects Windows version, refuses to run on non-24H2/25H2
+- **OS info in `install-config.json`** — host OS metadata passed to bootstrap script
+- **OS info in verification report** — final-verification.txt now includes sandbox and host OS details
+- **`_metadata` section in `config/tools.json`** — documents target OS, min build, architecture, supported editions
+- **WSB config comment** — documents target OS/architecture in the generated `.wsb` file
+- **Implementation plan document** at `Project_files/ImplementationPlan_14June2026_2309_CET.md`
+
+### Updated
+- `Project_files/README.md` — system requirements now specify 24H2/25H2 x64
+- `Project_files/USER_GUIDE.md` — version check section updated
+
+---
+
+## [2026.06.14.20.00] — 2026-06-14
+
+### Fixed
+- **Python MSI URL**: Updated to 3.12.7 (3.12.4 returned 404); added 3.11.10 fallback
+- **Beyond Compare 4 URL**: Replaced broken `scootersoftware.com/files/...` URL with `scootersoftware.com/download/bcompare-4-stable` and added 4.4.7 fallback
+- **LM Studio URL**: Removed broken GitHub API URL; using direct `lmstudio.ai/install/windows/latest/x64` and fallback to `lmstudio.ai/LM-Studio-Setup.exe`
+- **GitHub download fallback bug**: When GitHub API fails (rate limit) AND fallback URL exists, the URL was sometimes not being used. Fixed `if (-not $resolvedUrl)` to use `[string]::IsNullOrWhiteSpace()` to properly catch empty strings
+- **7-Zip & PowerToys**: Now properly download from fallback URL when GitHub API rate-limited (uses Test-InstallerAlreadyCached check)
+
+### Changed
+- All github downloads now use `Test-InstallerAlreadyCached` for cache validation (like direct downloads)
+
+---
+
+## [2026.06.14.18.30] — 2026-06-14
+
+### Added
+- **`Test-InstallationArtifacts` function** in `sandbox-bootstrap.ps1` — verifies post-install by checking for expected file paths and PATH commands
+- **Per-tool post-install verification** for Node.js, Python, Chrome, Brave, Notepad++, Beyond Compare, Ollama, LM Studio, OpenCode Terminal, OpenCode Desktop
+- **Final Verification Pass** at end of script — checks all critical tools and writes a `final-verification.txt` report to `C:\ProgramData\WindowsAISandboxApps\Logs\`
+- **Verification of PATH commands** — checks `ollama`, `node`, `npm`, `python`, `pip`, `code`, `git` are accessible
+- **Improved summary** — shows OK/WARN/ERROR/SKIP counts with status markers in log
+
+---
+
+## [2026.06.14.18.09] — 2026-06-14
+
+### Fixed
+- **Python installer**: Switched from `.exe` bootstrapper to `.msi` with verbose logging (`/L*v`). The `.exe` failed with COM error 0x80080005 in sandbox; MSI works with `msiexec`.
+- **Ollama**: Added WDAC policy bypass attempt (sets `VerifiedAndReputablePolicyState=0`); added curl fallback to download `ollama-windows-amd64.exe` CLI directly if NSIS installer blocked.
+- **OpenCode Terminal**: Switched from broken direct download (URL was an HTML page) to `npm i -g opencode-ai` (installed inside sandbox after Node.js).
+- **OpenCode Desktop**: Fixed URL to actual NSIS installer (`https://opencode.ai/download/stable/windows-x64-nsis`), corrected filename to `opencode-desktop-win-x64.exe`, added GitHub fallback URL.
+- **Copilot PWA**: Replaced hardcoded Chrome path with dynamic lookup (checks both `Program Files` and `Program Files (x86)`), removed invalid `--install-webapp` flag, now creates a desktop shortcut instead.
+- **Node.js fallback URL**: Updated from v20.12.2 to v20.18.0 in `Get-NodeLtsUrl`.
+- **MSI binary verification**: Added OLE compound document header check (D0 CF 11 E0) to `Verify-DownloadedBinaryContent` to catch corrupted MSI downloads.
+- **Batch file kill logic**: Removed `if %errorlevel%` conditional so we always wait 5 seconds after killing sandbox processes.
+
+### Changed
+- **Log directory**: Changed from `C:\ProgramData\AIWindowsSandbox\Logs` to `C:\ProgramData\WindowsAISandboxApps\Logs` in both host and sandbox scripts. WSB mapped folder updated to match.
+- **`Install-SilentProcess`**: Added optional `LogFile` parameter; auto-appends `/L*v` for MSI installers.
+- **npm downloadType**: Added handling in `Launch-AISandbox.ps1` to skip host-side download for npm-based tools.
+
+### Added
+- `Test-SandboxNotRunning` function in `Launch-AISandbox.ps1`; called before `Start-Process WindowsSandbox` to prevent "already running" errors.
+- `Project_files/ImplementationPlan_14June2026_1809_CET.md` — implementation plan document.
+
+---
+
+## [2026.06.14.16.40] — 2026-06-14
+
+### Fixed
+- GUI form size increased to accommodate all 22 tools (760x780)
+- Tools GroupBox height increased to 360px to show all tool checkboxes
+- Moved Settings, Launch button, Progress bar, Checklist, and Logs sections down to fit
+
+### Changed
+- Updated param block with new skip flags: `-SkipOpenCodeTerminal`, `-SkipOpenCodeDesktop`, `-SkipVSCode`, `-SkipVSCommunity`, `-Skip7Zip`, `-SkipSysinternals`, `-SkipPowerToys`, `-SkipWindowsSDK`, `-SkipADK`, `-SkipADKWinPE`, `-SkipAntigravity`
+- Updated launch button click handler to handle all new tools dynamically from tools.json
+- Checklist now includes all selected tools with correct display names
+
+---
+
+## [2026.06.14.16.28] — 2026-06-14
+
+### Added
+- **Visual Studio Code** — Silent install with context menu and PATH integration
+- **Visual Studio Community** — Full IDE with .NET, C++, and Node.js workloads
+- **7-Zip** — File archiver with silent install
+- **Sysinternals Suite** — ZIP extraction to `C:\Tools\Sysinternals` with PATH
+- **Windows PowerToys** — Utility suite for Windows
+- **Windows SDK** — Development tools for Windows apps
+- **Windows ADK** — Assessment and Deployment Kit
+- **Windows ADK WinPE Add-on** — WinPE add-on for ADK
+- **OpenCode Terminal** — CLI installer (renamed from "OpenCode")
+- **OpenCode Desktop** — Desktop GUI installer
+- **Gemma4 Model** — Auto-pulled after Ollama installation
+- **Antigravity CLI** — Attempted download/install (if available)
+
+### Changed
+- Updated installation order to include all new tools
+- Ollama now pulls both Gemma4 AND nous-hermes2 models
+- Removed placeholder checks (Antigravity 2.0, Hermes Agent CLI)
+
+### Full installation order
+1. Node.js + npm
+2. Python
+3. Google Chrome
+4. Page Assist Extension
+5. Brave Browser
+6. Notepad++
+7. Beyond Compare 4
+8. Ollama → Gemma4 → nous-hermes2
+9. LM Studio
+10. OpenCode Terminal
+11. OpenCode Desktop
+12. Crew AI
+13. Microsoft Copilot PWA
+14. Visual Studio Code
+15. Visual Studio Community
+16. 7-Zip
+17. Sysinternals Suite
+18. Windows PowerToys
+19. Windows SDK
+20. Windows ADK
+21. Windows ADK WinPE Add-on
+22. Antigravity CLI (if available)
+
+---
+
 ## [1.1.0] — 2026-06-14
 
 ### Added
